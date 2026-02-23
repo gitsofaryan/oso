@@ -9,15 +9,13 @@ import {
 import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
 import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
 import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
-import {
-  getMaterializations,
-  getModelContext,
-} from "@/app/api/v1/osograph/utils/resolver-helpers";
+import { getMaterializations } from "@/app/api/v1/osograph/utils/resolver-helpers";
 import {
   executePreviewQuery,
   generateTableId,
 } from "@/app/api/v1/osograph/utils/model";
 import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
+import { getModelContext } from "@/app/api/v1/osograph/schema/resolvers/model-context";
 import type {
   DataConnectionAliasModelContextArgs,
   DataConnectionAliasPreviewDataArgs,
@@ -64,14 +62,8 @@ export const dataConnectionTypeResolvers: GraphQLResolverModule<GraphQLContext> 
       modelContext: async (
         parent: DataConnectionAliasRow,
         args: DataConnectionAliasModelContextArgs,
-        context: GraphQLContext,
       ) => {
-        const { client } = await getOrgResourceClient(
-          context,
-          "data_connection",
-          parent.data_connection_id,
-        );
-        return getModelContext(parent.dataset_id, args.tableName, client);
+        return getModelContext(parent.dataset_id, args.tableName);
       },
       materializations: async (
         parent: DataConnectionAliasRow,
