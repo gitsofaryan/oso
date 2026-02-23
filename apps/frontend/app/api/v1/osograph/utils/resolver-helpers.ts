@@ -159,7 +159,7 @@ export async function getUserOrganizationsConnection(
     "organizations",
     predicate,
     undefined,
-    args.single,
+    { single: args.single },
   );
 
   if (orgError) {
