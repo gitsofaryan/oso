@@ -1,0 +1,89 @@
+test_aggregated_maps_unified_metric_model_to_label:
+  model: oso.int_crypto_ecosystems_developer_lifecycle_monthly_aggregated
+  inputs:
+    oso.timeseries_metrics_by_project_v0:
+      rows:
+        - metric_id: metric_ftc
+          project_id: project_1
+          sample_date: 2024-01-01
+          amount: 5
+          unit: null
+        - metric_id: metric_churn
+          project_id: project_1
+          sample_date: 2024-01-01
+          amount: 2
+          unit: null
+        - metric_id: metric_other
+          project_id: project_1
+          sample_date: 2024-01-01
+          amount: 10
+          unit: null
+    oso.metrics_v0:
+      rows:
+        - metric_id: metric_ftc
+          metric_name: GITHUB_first_time_contributor_unified_monthly
+          metric_model: first_time_contributor_unified
+          metric_event_source: GITHUB
+          metric_time_aggregation: monthly
+        - metric_id: metric_churn
+          metric_name: GITHUB_churned_after_full_time_contributor_unified_monthly
+          metric_model: churned_after_full_time_contributor_unified
+          metric_event_source: GITHUB
+          metric_time_aggregation: monthly
+        - metric_id: metric_other
+          metric_name: GITHUB_stars_daily
+          metric_model: stars
+          metric_event_source: GITHUB
+          metric_time_aggregation: daily
+    oso.projects_v1:
+      rows:
+        - project_id: project_1
+          project_name: ethereum
+          display_name: Ethereum
+          project_namespace: eco
+        - project_id: project_2
+          project_name: other_project
+          display_name: Other
+          project_namespace: ossd
+  outputs:
+    query:
+      rows:
+        - bucket_month: 2024-01-01
+          project_id: project_1
+          project_name: ethereum
+          project_display_name: Ethereum
+          label: first time
+          developers_count: 5
+        - bucket_month: 2024-01-01
+          project_id: project_1
+          project_name: ethereum
+          project_display_name: Ethereum
+          label: churned (after reaching full time)
+          developers_count: 2
+
+test_aggregated_excludes_non_eco_projects:
+  model: oso.int_crypto_ecosystems_developer_lifecycle_monthly_aggregated
+  inputs:
+    oso.timeseries_metrics_by_project_v0:
+      rows:
+        - metric_id: metric_ftc
+          project_id: non_eco_project
+          sample_date: 2024-01-01
+          amount: 5
+          unit: null
+    oso.metrics_v0:
+      rows:
+        - metric_id: metric_ftc
+          metric_name: GITHUB_first_time_contributor_unified_monthly
+          metric_model: first_time_contributor_unified
+          metric_event_source: GITHUB
+          metric_time_aggregation: monthly
+    oso.projects_v1:
+      rows:
+        - project_id: non_eco_project
+          project_name: some_project
+          display_name: Some Project
+          project_namespace: ossd
+  outputs:
+    query:
+      rows: []

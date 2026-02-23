@@ -351,6 +351,39 @@ timeseries_metrics(
             ),
             additional_tags=["data_category=code"],
         ),
+        "contributor_active_days_unified": MetricQueryDef(
+            ref="code/active_days_unified.sql",
+            vars={
+                "activity_event_types": [
+                    "COMMIT_CODE",
+                    "ISSUE_OPENED",
+                    "PULL_REQUEST_OPENED",
+                    "PULL_REQUEST_MERGED",
+                ],
+            },
+            time_aggregations=["monthly", "yearly"],
+            entity_types=["artifact", "project", "collection"],
+            is_intermediate=True,
+            additional_tags=["data_category=code"],
+        ),
+        "contributor_classifications_unified": MetricQueryDef(
+            ref="code/contributor_activity_classification_unified.sql",
+            vars={
+                "full_time_ratio": 10 / 30,
+                "activity_event_types": [
+                    "COMMIT_CODE",
+                    "ISSUE_OPENED",
+                    "PULL_REQUEST_OPENED",
+                    "PULL_REQUEST_MERGED",
+                ],
+            },
+            time_aggregations=["monthly", "yearly"],
+            metadata=MetricMetadata(
+                display_name="Contributor Classifications (Unified)",
+                description="Contributor lifecycle metrics from unified GitHub events (GHArchive + OpenDevData)",
+            ),
+            additional_tags=["data_category=code"],
+        ),
         # Currently this query performs really poorly. We need to do some debugging on it
         # "user_retention_classifications": MetricQueryDef(
         #     ref="blockchain/user_retention_classification.sql",
