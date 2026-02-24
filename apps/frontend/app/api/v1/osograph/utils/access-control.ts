@@ -216,16 +216,27 @@ export interface AuthenticatedClientResult {
  * Returns orgIds already scoped by token type:
  * - API tokens → [tokenOrgId]
  * - PATs → all user orgs
+ * - System callers → bypass auth, orgIds: [] (org predicate skipped in queryWithExplicitClient)
  *
  * Note: This does NOT check org membership, use getOrgScopedClient for that.
  *
  * @param context GraphQL context
  * @returns Object containing Supabase admin client, user ID, scoped orgIds, and orgScope
  * @throws {AuthenticationErrors.notAuthenticated()} if user is anonymous
+ * @throws {AuthenticationErrors.notAuthorized()} if authenticated user has no organizations
  */
 export async function getAuthenticatedClient(
   context: GraphQLContext,
 ): Promise<AuthenticatedClientResult> {
+  if (context.systemCredentials) {
+    return {
+      client: createAdminClient(),
+      userId: "",
+      orgIds: [],
+      orgScope: { type: "system" },
+    };
+  }
+
   const user = requireAuthentication(context.user);
   const client = createAdminClient();
   const orgScope = getOrgScope(context);
@@ -233,6 +244,13 @@ export async function getAuthenticatedClient(
     orgScope.type === "api_token"
       ? [orgScope.orgId]
       : await getOrCacheUserOrgIds(context, user.userId, client);
+
+  if (orgIds.length === 0) {
+    logger.warn("Authenticated user has no organizations", {
+      userId: user.userId,
+    });
+    throw AuthenticationErrors.notAuthorized();
+  }
 
   return { client, userId: user.userId, orgIds, orgScope };
 }
@@ -255,6 +273,14 @@ export async function getOrgScopedClient(
   context: GraphQLContext,
   orgId: string,
 ): Promise<OrgAccessResult> {
+  if (context.systemCredentials) {
+    return {
+      client: createAdminClient(),
+      orgRole: "owner",
+      userId: "",
+    };
+  }
+
   const user = requireAuthentication(context.user);
 
   const orgScope = getOrgScope(context);
@@ -389,6 +415,13 @@ export async function getOrgResourceClient(
   resourceId: string,
   requiredPermission: Exclude<PermissionLevel, "none"> = "read",
 ): Promise<ResourceAccessResult> {
+  if (context.systemCredentials) {
+    return {
+      client: createAdminClient(),
+      permissionLevel: "owner",
+    };
+  }
+
   const user = requireAuthentication(context.user);
   const cacheKey = `${user.userId}:${resourceType}:${resourceId}`;
 
