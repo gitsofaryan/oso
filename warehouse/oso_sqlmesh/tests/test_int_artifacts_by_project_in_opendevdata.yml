@@ -1,17 +1,16 @@
-# Tests for int_artifacts_by_project_in_crypto_ecosystems
+# Tests for int_artifacts_by_project_in_opendevdata
 # Validates artifact_source_id COALESCE: OSSD > gharchive
 
-test_int_artifacts_by_project_in_crypto_ecosystems_ossd_fallback:
+test_int_artifacts_by_project_in_opendevdata_ossd_fallback:
   # When int_artifacts__github has no match but int_repositories__ossd does,
   # artifact_source_id should come from OSSD
-  model: oso.int_artifacts_by_project_in_crypto_ecosystems
+  model: oso.int_artifacts_by_project_in_opendevdata
   inputs:
-    oso.stg_crypto_ecosystems__taxonomy:
+    oso.int_repos_by_ecosystem_in_opendevdata:
       rows:
-        - repo_url: "https://github.com/testorg/testrepo"
-          eco_name: "Test Ecosystem"
-          branch: null
-          tags: null
+        - repo_link: "https://github.com/testorg/testrepo"
+          ecosystem_name: "Test Ecosystem"
+          distance: 0
     oso.int_artifacts__github:
       rows: []
     oso.int_repositories__ossd:
@@ -27,16 +26,15 @@ test_int_artifacts_by_project_in_crypto_ecosystems_ossd_fallback:
           artifact_namespace: "testorg"
           artifact_name: "testrepo"
 
-test_int_artifacts_by_project_in_crypto_ecosystems_gharchive_only:
+test_int_artifacts_by_project_in_opendevdata_gharchive_only:
   # When only int_artifacts__github has the ID, use it
-  model: oso.int_artifacts_by_project_in_crypto_ecosystems
+  model: oso.int_artifacts_by_project_in_opendevdata
   inputs:
-    oso.stg_crypto_ecosystems__taxonomy:
+    oso.int_repos_by_ecosystem_in_opendevdata:
       rows:
-        - repo_url: "https://github.com/orgA/repoA"
-          eco_name: "Eco A"
-          branch: null
-          tags: null
+        - repo_link: "https://github.com/orgA/repoA"
+          ecosystem_name: "Eco A"
+          distance: 0
     oso.int_artifacts__github:
       rows:
         - artifact_source_id: "gharchive_id_456"
@@ -59,16 +57,15 @@ test_int_artifacts_by_project_in_crypto_ecosystems_gharchive_only:
           artifact_namespace: "orga"
           artifact_name: "repoa"
 
-test_int_artifacts_by_project_in_crypto_ecosystems_ossd_preferred:
+test_int_artifacts_by_project_in_opendevdata_ossd_preferred:
   # When both sources have a match, OSSD takes priority
-  model: oso.int_artifacts_by_project_in_crypto_ecosystems
+  model: oso.int_artifacts_by_project_in_opendevdata
   inputs:
-    oso.stg_crypto_ecosystems__taxonomy:
+    oso.int_repos_by_ecosystem_in_opendevdata:
       rows:
-        - repo_url: "https://github.com/bothorg/bothrepo"
-          eco_name: "Both Eco"
-          branch: null
-          tags: null
+        - repo_link: "https://github.com/bothorg/bothrepo"
+          ecosystem_name: "Both Eco"
+          distance: 0
     oso.int_artifacts__github:
       rows:
         - artifact_source_id: "gharchive_id_789"

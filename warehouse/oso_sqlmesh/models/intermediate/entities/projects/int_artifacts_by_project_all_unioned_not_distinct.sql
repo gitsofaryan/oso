@@ -69,7 +69,7 @@ SELECT
   artifact_namespace,
   artifact_name,
   artifact_url
-FROM oso.int_artifacts_by_project_in_crypto_ecosystems
+FROM oso.int_artifacts_by_project_in_opendevdata
 UNION ALL
 SELECT
   project_id,

@@ -16,7 +16,7 @@ test_bridge_ossd_to_gharchive_basic:
         display_name: "Optimism"
         description: "Optimism protocol"
       - project_id: "project_3"
-        project_source: "CRYPTO_ECOSYSTEMS"
+        project_source: "OPENDEVDATA"
         project_namespace: "ce"
         project_name: "ethereum"
         display_name: "Ethereum"
@@ -53,14 +53,14 @@ test_bridge_ossd_to_gharchive_basic:
         project_source: "OSS_DIRECTORY"
         project_namespace: "oso"
         project_name: "optimism"
-      # CRYPTO_ECOSYSTEMS project with GITHUB artifact -> should be excluded
+      # OPENDEVDATA project with GITHUB artifact -> should be excluded
       - artifact_id: "artifact_4"
         artifact_source_id: "99999"
         artifact_source: "GITHUB"
         artifact_namespace: "ethereum"
         artifact_name: "go-ethereum"
         project_id: "project_3"
-        project_source: "CRYPTO_ECOSYSTEMS"
+        project_source: "OPENDEVDATA"
         project_namespace: "ce"
         project_name: "ethereum"
   outputs:

@@ -41,7 +41,7 @@ ec_artifacts AS (
     artifact_namespace,
     artifact_name,
     artifact_url
-  FROM oso.int_artifacts_by_project_in_crypto_ecosystems
+  FROM oso.int_artifacts_by_project_in_opendevdata
   WHERE project_namespace = 'eco'
     AND project_name IN (
       'ethereum',
@@ -56,7 +56,7 @@ ec_projects AS (
   SELECT
     artifact_id,
     project_name
-  FROM oso.int_artifacts_by_project_in_crypto_ecosystems
+  FROM oso.int_artifacts_by_project_in_opendevdata
   WHERE project_namespace = 'eco'
     AND project_name IN (
       'ethereum',

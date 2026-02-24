@@ -28,7 +28,7 @@ WITH ossd_projects AS (
     display_name,
     description
   FROM oso.stg_op_atlas_project
-), crypto_ecosystem_projects AS (
+), opendevdata_projects AS (
   SELECT DISTINCT
     project_id,
     project_source,
@@ -36,7 +36,7 @@ WITH ossd_projects AS (
     project_name,
     project_display_name AS display_name,
     NULL::VARCHAR AS description
-  FROM oso.int_artifacts_by_project_in_crypto_ecosystems
+  FROM oso.int_artifacts_by_project_in_opendevdata
 ), defillama_projects AS (
   SELECT DISTINCT
     project_id,
@@ -68,7 +68,7 @@ FROM op_atlas_projects
 UNION ALL
 SELECT
   *
-FROM crypto_ecosystem_projects
+FROM opendevdata_projects
 UNION ALL
 SELECT
   *

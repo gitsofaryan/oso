@@ -18,7 +18,7 @@ MODEL (
     final_score = 'The final trust score assigned to this repository by the DDP v0 discovery algorithm, representing the repository''s relationship strength to Ethereum development based on developer contribution patterns. Scores range from 0 to 1, with higher scores indicating stronger relationships.',
     is_personal_repo = 'Boolean flag indicating whether the repository maintainer (owner) is a personal GitHub user account rather than an organization.',
     is_package_owner = 'Boolean flag indicating whether this repository owns one or more packages listed in deps.dev (npm registry), determined by checking if the repository artifact_id appears as a package_owner_artifact_id.',
-    is_in_crypto_ecosystems = 'Boolean flag indicating whether this repository itself is listed in the crypto ecosystems taxonomy (Ethereum, EVM L1/L2, Solana) as a project artifact.',
+    is_in_opendevdata = 'Boolean flag indicating whether this repository itself is listed in OpenDevData (project_source OPENDEVDATA, project_namespace eco) as a project artifact.',
     is_maintainer_in_crypto_ecosystems = 'Boolean flag indicating whether the repository maintainer (artifact_namespace) has any repositories listed in the crypto ecosystems taxonomy, indicating the maintainer is associated with crypto ecosystems.',
     is_in_ossd = 'Boolean flag indicating whether this repository is listed in the OSS Directory registry (GitHub repositories only).',
     is_in_op_atlas = 'Boolean flag indicating whether this repository is listed in the OP Atlas registry (GitHub repositories only).',
@@ -74,18 +74,18 @@ repo_checks AS (
     END AS is_package_owner,
     CASE 
       WHEN EXISTS (
-        SELECT 1 FROM oso.int_artifacts_by_project_in_crypto_ecosystems AS ce
+        SELECT 1 FROM oso.int_artifacts_by_project_in_opendevdata AS ce
         WHERE ce.artifact_id = s.repo_artifact_id
-          AND ce.project_source = 'CRYPTO_ECOSYSTEMS'
+          AND ce.project_source = 'OPENDEVDATA'
           AND ce.project_namespace = 'eco'
       ) THEN TRUE 
       ELSE FALSE 
-    END AS is_in_crypto_ecosystems,
+    END AS is_in_opendevdata,
     CASE 
       WHEN EXISTS (
-        SELECT 1 FROM oso.int_artifacts_by_project_in_crypto_ecosystems AS ce_maintainer
+        SELECT 1 FROM oso.int_artifacts_by_project_in_opendevdata AS ce_maintainer
         WHERE ce_maintainer.artifact_namespace = s.repo_maintainer
-          AND ce_maintainer.project_source = 'CRYPTO_ECOSYSTEMS'
+          AND ce_maintainer.project_source = 'OPENDEVDATA'
           AND ce_maintainer.project_namespace = 'eco'
       ) THEN TRUE 
       ELSE FALSE 
@@ -155,7 +155,7 @@ final AS (
     s.final_score,
     rc.is_personal_repo,
     rc.is_package_owner,
-    rc.is_in_crypto_ecosystems,
+    rc.is_in_opendevdata,
     rc.is_maintainer_in_crypto_ecosystems,
     rc.is_in_ossd,
     rc.is_in_op_atlas,
@@ -181,7 +181,7 @@ SELECT DISTINCT
   final_score,
   is_personal_repo,
   is_package_owner,
-  is_in_crypto_ecosystems,
+  is_in_opendevdata,
   is_maintainer_in_crypto_ecosystems,
   is_in_ossd,
   is_in_op_atlas,
