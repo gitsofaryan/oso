@@ -24,4 +24,4 @@ spec:
               containerPort: 8181
           env:
             - name: OPA_SYSTEM_JWT
-              value: gcp:secretmanager:production-opa-system-jwt/versions/latest
+              value: gcp:secretmanager:production-opa-system-api-key/versions/latest

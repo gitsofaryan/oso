@@ -5,6 +5,7 @@ metadata:
   labels:
     toolkit.fluxcd.io/tenant: apps
     ops.opensource.observer/environment: base
+    kube-secrets-init.doit-intl.com/enable-mutation: "true"
 ---
 apiVersion: v1
 kind: ServiceAccount
