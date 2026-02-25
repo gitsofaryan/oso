@@ -93,6 +93,21 @@ is_public_catalog if {
 	current_catalog_name in public_catalogs
 }
 
+# Cross-org shared access via data.shared_schemas bundle
+# data.shared_schemas: { "<subscriber_org_id>": { "<catalog>": ["<schema1>", ...] } }
+# Access requires the schema to be explicitly listed or be information_schema.
+default is_shared_schema := false
+
+is_shared_schema if {
+	schemas := data.shared_schemas[parsed_user.org_id][current_catalog_name]
+	current_schema_name in schemas
+}
+
+is_shared_schema if {
+	data.shared_schemas[parsed_user.org_id][current_catalog_name]
+	current_schema_name == "information_schema"
+}
+
 allow if {
 	input.action.operation == "ExecuteQuery"
 }
@@ -120,6 +135,7 @@ allow if {
 		is_user_shared_access,
 		is_user_shared_schema,
 		is_public_catalog,
+		is_shared_schema,
 	]
 	x
 }

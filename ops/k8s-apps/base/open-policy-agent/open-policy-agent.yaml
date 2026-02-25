@@ -27,11 +27,21 @@ data:
           gcp_metadata:
             scopes:
               - https://www.googleapis.com/auth/devstorage.read_only
+      frontend:
+        url: https://oso.xyz
+        headers:
+          x-system-credentials: "${OPA_SYSTEM_JWT}"
 
     bundles:
       authz:
         service: gcs
         resource: "bundle.tar.gz?alt=media"
+      permissions:
+        service: frontend
+        resource: "/api/v1/opa/bundle"
+        polling:
+          min_delay_seconds: 30
+          max_delay_seconds: 60
 ---
 apiVersion: apps/v1
 kind: Deployment

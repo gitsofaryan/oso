@@ -329,3 +329,92 @@ test_ro_user_denied_write_operations if {
 		},
 	}
 }
+
+# --- Cross-org shared schema tests ---
+
+mock_shared_schemas := {"suborgid": {"publisher__catalog": ["org_puborgid__datasetid"]}}
+
+test_shared_schema_read_access if {
+	trino.allow with input as {
+		"context": {"identity": {"user": "ro-suborg-suborgid"}},
+		"action": {
+			"operation": "SelectFromColumns",
+			"resource": {"table": {
+				"catalogName": "publisher__catalog",
+				"schemaName": "org_puborgid__datasetid",
+				"tableName": "some_table",
+			}},
+		},
+	} with data.shared_schemas as mock_shared_schemas
+}
+
+test_shared_schema_info_schema_access if {
+	trino.allow with input as {
+		"context": {"identity": {"user": "ro-suborg-suborgid"}},
+		"action": {
+			"operation": "SelectFromColumns",
+			"resource": {"table": {
+				"catalogName": "publisher__catalog",
+				"schemaName": "information_schema",
+				"tableName": "tables",
+			}},
+		},
+	} with data.shared_schemas as mock_shared_schemas
+}
+
+test_shared_schema_denied_wrong_schema if {
+	not trino.allow with input as {
+		"context": {"identity": {"user": "ro-suborg-suborgid"}},
+		"action": {
+			"operation": "SelectFromColumns",
+			"resource": {"table": {
+				"catalogName": "publisher__catalog",
+				"schemaName": "org_puborgid__other_dataset",
+				"tableName": "some_table",
+			}},
+		},
+	} with data.shared_schemas as mock_shared_schemas
+}
+
+test_shared_schema_denied_write if {
+	not trino.allow with input as {
+		"context": {"identity": {"user": "rw-suborg-suborgid"}},
+		"action": {
+			"operation": "CreateTable",
+			"resource": {"table": {
+				"catalogName": "publisher__catalog",
+				"schemaName": "org_puborgid__datasetid",
+				"tableName": "new_table",
+			}},
+		},
+	} with data.shared_schemas as mock_shared_schemas
+}
+
+test_shared_schema_denied_wrong_org if {
+	not trino.allow with input as {
+		"context": {"identity": {"user": "ro-otherorgnm-otherorgid"}},
+		"action": {
+			"operation": "SelectFromColumns",
+			"resource": {"table": {
+				"catalogName": "publisher__catalog",
+				"schemaName": "org_puborgid__datasetid",
+				"tableName": "some_table",
+			}},
+		},
+	} with data.shared_schemas as mock_shared_schemas
+}
+
+test_empty_shared_schemas_backward_compat if {
+	# Existing org catalog access still works with empty shared_schemas
+	trino.allow with input as {
+		"context": {"identity": {"user": "ro-orgname-orgid"}},
+		"action": {
+			"operation": "SelectFromColumns",
+			"resource": {"table": {
+				"catalogName": "orgname__catalog",
+				"schemaName": "some_schema",
+				"tableName": "some_table",
+			}},
+		},
+	} with data.shared_schemas as {}
+}
