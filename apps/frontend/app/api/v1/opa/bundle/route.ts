@@ -13,6 +13,9 @@ const gzipAsync = promisify(gzip);
 type SharedSchemas = Record<string, Record<string, string[]>>; // orgId -> catalog -> [schemas]
 
 const PAGE_SIZE = 1000;
+const MANIFEST_CONTENT = JSON.stringify({
+  roots: ["shared_schemas"],
+});
 
 async function fetchSharedSchemas(): Promise<SharedSchemas> {
   const supabase = createAdminClient();
@@ -72,9 +75,14 @@ async function fetchSharedSchemas(): Promise<SharedSchemas> {
 
 async function buildTarGz(dataJson: string): Promise<Buffer> {
   const content = new TextEncoder().encode(dataJson);
+  const manifestContent = new TextEncoder().encode(MANIFEST_CONTENT);
 
   const tarBuffer = await packTar([
     { header: { name: "data.json", size: content.byteLength }, body: content },
+    {
+      header: { name: ".manifest", size: manifestContent.byteLength },
+      body: manifestContent,
+    },
   ]);
 
   return Buffer.from(await gzipAsync(tarBuffer));
