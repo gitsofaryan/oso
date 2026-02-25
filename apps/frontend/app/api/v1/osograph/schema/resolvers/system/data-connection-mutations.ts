@@ -175,7 +175,15 @@ export const dataConnectionMutationResolvers: GraphQLResolverModule<GraphQLConte
           const existingMatsForDataset =
             existingMatsByDataset.get(datasetId) || new Map();
           const inputTableIds = new Set(
-            schema.tables.map((t) => `${schema.name}.${t.name}`),
+            schema.tables.map((t) =>
+              generateTableId("DATA_CONNECTION", t.name),
+            ),
+          );
+
+          logger.info(
+            `[createDataConnectionDatasets] schema="${schema.name}" datasetId="${datasetId}" ` +
+              `inputTableIds=${JSON.stringify(Array.from(inputTableIds))} ` +
+              `existingMatTableIds=${JSON.stringify(Array.from(existingMatsForDataset.keys()))}`,
           );
 
           for (const table of schema.tables) {
@@ -208,6 +216,10 @@ export const dataConnectionMutationResolvers: GraphQLResolverModule<GraphQLConte
             existingMatsForDataset.entries(),
           )) {
             if (!inputTableIds.has(tableId)) {
+              logger.warn(
+                `[createDataConnectionDatasets] Marking materialization for deletion: ` +
+                  `matId="${matId}" tableId="${tableId}" not found in inputTableIds=${JSON.stringify(Array.from(inputTableIds))}`,
+              );
               materializationIdsToDelete.push(matId);
             }
           }
