@@ -2,7 +2,9 @@ import { TrinoClient } from "@/lib/clients/trino";
 import { DynamicConnectorsRow } from "@/lib/types/schema-types";
 
 // TODO(icaro): change this to use orgId
-export function getCatalogName(connector: DynamicConnectorsRow) {
+export function getCatalogName(
+  connector: Pick<DynamicConnectorsRow, "org_id" | "connector_name">,
+): string {
   return `org_${connector.org_id
     .trim()
     .replace(/-/g, "")
