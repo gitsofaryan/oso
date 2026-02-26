@@ -37,7 +37,7 @@ import {
   organizationsRowSchema,
   runRowSchema,
 } from "@/lib/types/schema";
-import type { DatasetsRow } from "@/lib/types/schema-types";
+import type { DatasetsRow, MaterializationRow } from "@/lib/types/schema-types";
 import { z } from "zod";
 
 export function buildConnectionOrEmpty<T>(
@@ -159,7 +159,7 @@ export async function getUserOrganizationsConnection(
     "organizations",
     predicate,
     undefined,
-    { single: args.single },
+    { single: args.single ?? undefined },
   );
 
   if (orgError) {
@@ -232,55 +232,28 @@ export async function requireOrganizationAccess(userId: string, orgId: string) {
   return org;
 }
 
-export async function getResourceById<T>(
-  params: {
-    tableName: keyof Database["public"]["Tables"];
+type TableWithId = {
+  [T in keyof Database["public"]["Tables"]]: Database["public"]["Tables"][T]["Row"] extends {
     id: string;
-    userId: string;
-    checkMembership?: boolean;
-  },
-  adminClient: SupabaseAdminClient,
-): Promise<T | null>;
-/** @deprecated - use `getResourceById` with extra client parameter */
-export async function getResourceById<T>(params: {
-  tableName: keyof Database["public"]["Tables"];
-  id: string;
-  userId: string;
-  checkMembership?: boolean;
-}): Promise<T | null>;
-export async function getResourceById<T>(
-  params: {
-    tableName: keyof Database["public"]["Tables"];
-    id: string;
-    userId: string;
-    checkMembership?: boolean;
-  },
-  adminClient?: SupabaseAdminClient,
-): Promise<T | null> {
-  const { tableName, id, userId, checkMembership = true } = params;
+    deleted_at: string | null;
+  }
+    ? T
+    : never;
+}[keyof Database["public"]["Tables"]];
 
-  const supabase = adminClient ?? createAdminClient();
-  const { data: resource, error } = await supabase
+export async function getResourceById<T extends TableWithId>(
+  tableName: T,
+  id: string,
+  client: SupabaseAdminClient,
+) {
+  const { data, error } = await client
     .from(tableName)
     .select("*")
+    // @ts-expect-error - T is constrained to tables with string id and deleted_at, but TS can't infer that here
     .eq("id", id)
     .is("deleted_at", null)
     .single();
-
-  if (error || !resource) {
-    return null;
-  }
-
-  if (checkMembership && "org_id" in resource && resource.org_id) {
-    try {
-      await requireOrgMembership(userId, resource.org_id as string);
-      return resource as T;
-    } catch {
-      return null;
-    }
-  }
-
-  return resource as T;
+  return error || !data ? null : data;
 }
 
 export async function checkMembershipExists(
@@ -350,7 +323,44 @@ export async function getMaterializations(
   orgId: string,
   datasetId: string,
   tableId: string,
-) {
+): Promise<Connection<MaterializationRow>>;
+export async function getMaterializations(
+  args: FilterableConnectionArgs,
+  context: GraphQLContext,
+  orgId: string,
+  datasetId: string,
+  tableId: string,
+  client: SupabaseAdminClient,
+): Promise<Connection<MaterializationRow>>;
+export async function getMaterializations(
+  args: FilterableConnectionArgs,
+  context: GraphQLContext,
+  orgId: string,
+  datasetId: string,
+  tableId: string,
+  client?: SupabaseAdminClient,
+): Promise<Connection<MaterializationRow>> {
+  if (client) {
+    return queryWithPagination(args, context, {
+      client,
+      tableName: "materialization",
+      whereSchema: MaterializationWhereSchema,
+      orgIds: [orgId],
+      basePredicate: {
+        eq: [
+          { key: "dataset_id", value: datasetId },
+          {
+            key: "table_id",
+            value: tableId,
+          },
+        ],
+      },
+      orderBy: {
+        key: "created_at",
+        ascending: false,
+      },
+    });
+  }
   return queryWithPagination(args, context, {
     tableName: "materialization",
     whereSchema: MaterializationWhereSchema,

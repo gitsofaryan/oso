@@ -1,135 +1,100 @@
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import {
-  ConnectionArgs,
-  FilterableConnectionArgs,
-} from "@/app/api/v1/osograph/utils/pagination";
-import { StaticModelRow } from "@/lib/types/schema-types";
-import {
-  getOrganization,
-  requireAuthentication,
-} from "@/app/api/v1/osograph/utils/auth";
+import { getOrganization } from "@/app/api/v1/osograph/utils/auth";
+import { ResourceErrors } from "@/app/api/v1/osograph/utils/errors";
 import {
   getMaterializations,
   getModelContext,
   getModelRunConnection,
   getResourceById,
 } from "@/app/api/v1/osograph/utils/resolver-helpers";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
 import {
   executePreviewQuery,
   generateTableId,
 } from "@/app/api/v1/osograph/utils/model";
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
-import type { PreviewData } from "@/lib/graphql/generated/graphql";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withOrgResourceClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type {
+  Resolvers,
+  StaticModelResolvers,
+} from "@/app/api/v1/osograph/types/generated/types";
 
-/**
- * Type resolvers for StaticModel.
- * These field resolvers don't require auth checks as they operate on
- * already-fetched static model data.
- */
-export const staticModelTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
+export const staticModelTypeResolvers: Required<
+  Pick<Resolvers, "StaticModel">
+> = {
   StaticModel: {
-    orgId: (parent: StaticModelRow) => {
-      return parent.org_id;
-    },
-    organization: async (
-      parent: StaticModelRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "static_model",
-        parent.id,
-      );
-      return getOrganization(parent.org_id, client);
-    },
-    dataset: async (
-      parent: StaticModelRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "static_model",
-        parent.id,
-      );
-      return getResourceById(
-        {
-          tableName: "datasets",
-          id: parent.dataset_id,
-          userId: "",
-          checkMembership: false,
-        },
-        client,
-      );
-    },
-    createdAt: (parent: StaticModelRow) => {
-      return parent.created_at;
-    },
-    updatedAt: (parent: StaticModelRow) => {
-      return parent.updated_at;
-    },
-    runs: async (
-      parent: StaticModelRow,
-      args: ConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "static_model",
-        parent.id,
-      );
-      return getModelRunConnection(parent.dataset_id, parent.id, args, client);
-    },
-    modelContext: async (
-      parent: StaticModelRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "static_model",
-        parent.id,
-      );
-      return getModelContext(parent.dataset_id, parent.id, client);
-    },
-    materializations: async (
-      parent: StaticModelRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      return getMaterializations(
-        args,
-        context,
-        parent.org_id,
-        parent.dataset_id,
-        generateTableId("STATIC_MODEL", parent.id),
-      );
-    },
-    previewData: async (
-      parent: StaticModelRow,
-      _args: Record<string, never>,
-      context: GraphQLContext,
-    ): Promise<PreviewData> => {
-      const authenticatedUser = requireAuthentication(context.user);
-      const { client } = await getOrgResourceClient(
-        context,
-        "static_model",
-        parent.id,
-        "read",
-      );
+    orgId: (parent) => parent.org_id,
 
-      const tableId = generateTableId("STATIC_MODEL", parent.id);
+    createdAt: (parent) => parent.created_at,
 
-      return executePreviewQuery(
-        parent.org_id,
-        parent.dataset_id,
-        tableId,
-        authenticatedUser,
-        parent.name,
-        client,
-      );
-    },
+    updatedAt: (parent) => parent.updated_at,
+
+    organization: createResolver<StaticModelResolvers, "organization">()
+      .use(withOrgResourceClient("static_model", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) => {
+        return getOrganization(parent.org_id, context.client);
+      }),
+
+    dataset: createResolver<StaticModelResolvers, "dataset">()
+      .use(withOrgResourceClient("static_model", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) => {
+        const dataset = await getResourceById(
+          "datasets",
+          parent.dataset_id,
+          context.client,
+        );
+        if (!dataset)
+          throw ResourceErrors.notFound("Dataset", parent.dataset_id);
+        return dataset;
+      }),
+
+    runs: createResolver<StaticModelResolvers, "runs">()
+      .use(withOrgResourceClient("static_model", ({ parent }) => parent.id))
+      .resolve(async (parent, args, context) => {
+        return getModelRunConnection(
+          parent.dataset_id,
+          parent.id,
+          args,
+          context.client,
+        );
+      }),
+
+    modelContext: createResolver<StaticModelResolvers, "modelContext">()
+      .use(withOrgResourceClient("static_model", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) => {
+        return getModelContext(parent.dataset_id, parent.id, context.client);
+      }),
+
+    materializations: createResolver<StaticModelResolvers, "materializations">()
+      .use(withOrgResourceClient("static_model", ({ parent }) => parent.id))
+      .resolve(async (parent, args, context) => {
+        return getMaterializations(
+          args,
+          context,
+          parent.org_id,
+          parent.dataset_id,
+          generateTableId("STATIC_MODEL", parent.id),
+          context.client,
+        );
+      }),
+
+    previewData: createResolver<StaticModelResolvers, "previewData">()
+      .use(
+        withOrgResourceClient(
+          "static_model",
+          ({ parent }) => parent.id,
+          "read",
+        ),
+      )
+      .resolve(async (parent, _args, context) => {
+        const tableId = generateTableId("STATIC_MODEL", parent.id);
+
+        return executePreviewQuery(
+          parent.org_id,
+          parent.dataset_id,
+          tableId,
+          context.authenticatedUser,
+          parent.name,
+          context.client,
+        );
+      }),
   },
 };

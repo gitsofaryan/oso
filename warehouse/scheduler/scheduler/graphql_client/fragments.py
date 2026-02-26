@@ -71,8 +71,8 @@ class LatestDataModelLatestReleaseRevisionKindOptions(BaseModel):
 
 
 class LatestDataModelLatestReleaseRevisionSchema(BaseModel):
-    name: str
-    type: str
+    name: Optional[str]
+    type: Optional[str]
     description: Optional[str]
 
 
@@ -107,7 +107,7 @@ class DatasetCommonOrganization(OrganizationCommon):
 
 class UserCommon(BaseModel):
     id: str
-    email: str
+    email: Optional[str]
 
 
 class RunCommon(BaseModel):

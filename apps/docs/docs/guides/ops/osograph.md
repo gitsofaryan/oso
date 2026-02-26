@@ -44,7 +44,10 @@ frontend/app/api/v1/osograph/
 │   │   └── *.graphql          # Domain schemas
 │   └── resolvers/             # Resolver implementations
 │       ├── index.ts           # Combines all resolvers
-│       └── *.ts               # Domain resolvers
+│       ├── user/              # withAuthenticatedClient() → AuthenticatedClientContext
+│       ├── organization/      # withOrgScopedClient(getOrgId) → OrgScopedContext
+│       ├── resource/          # withOrgResourceClient(type,getId,perm) → ResourceScopedContext
+│       └── system/            # withSystemClient() → SystemContext
 ├── types/
 │   ├── context.ts             # GraphQL context
 │   └── utils.ts               # Type utilities
@@ -55,10 +58,31 @@ frontend/app/api/v1/osograph/
     ├── pagination.ts          # Cursor pagination (constants & encoding)
     ├── query-builder.ts       # Builds Supabase queries from predicates
     ├── query-helpers.ts       # High-level query helpers (queryWithPagination)
+    ├── resolver-builder.ts    # createResolver, createResolversCollection
     ├── resolver-helpers.ts    # Shared resolver utilities
+    ├── resolver-middleware.ts # Middleware factories (withAuthenticatedClient, etc.)
     ├── validation.ts          # Zod schemas & input validation
     └── where-parser.ts        # Parses GraphQL where input to predicates
 ```
+
+## Middleware Tiers
+
+Resolvers are organized into four tiers. Each tier applies a specific middleware that sets up the Supabase client and attaches access-control context. Choose the right tier based on what the resolver needs:
+
+| Directory       | Middleware                                 | Context additions                                              |
+| --------------- | ------------------------------------------ | -------------------------------------------------------------- |
+| `user/`         | `withAuthenticatedClient()`                | `client`, `userId`, `orgIds`, `authenticatedUser`              |
+| `organization/` | `withOrgScopedClient(getOrgId)`            | `client`, `orgId`, `orgRole`, `userId`, `authenticatedUser`    |
+| `resource/`     | `withOrgResourceClient(type, getId, perm)` | `client`, `resourceId`, `permissionLevel`, `authenticatedUser` |
+| `system/`       | `withSystemClient()`                       | `client`                                                       |
+
+**Rules:**
+
+- `withValidation()` must come **before** any access-control middleware
+- Never call `createAdminClient()` in resolver files — always use `context.client`
+- Queries live in `user/*/queries.ts` (scoped to the authenticated user's orgs)
+- Mutations live in `resource/*/mutations.ts` or `organization/*/mutations.ts`
+- Type-resolvers live in `resource/*/type-resolvers.ts`
 
 ## Adding a Query
 
@@ -73,9 +97,6 @@ type Widget {
   orgId: ID!
   createdAt: DateTime!
   updatedAt: DateTime!
-  creatorId: ID!
-  creator: User!
-  organization: Organization!
 }
 
 type WidgetEdge {
@@ -117,55 +138,33 @@ widgets(where: { id: { eq: "widget_id" } })
 
 :::
 
-**2. Implement Resolver** (`schema/resolvers/widget.ts`)
+**2. Implement Resolver** (`schema/resolvers/user/widget/queries.ts`)
 
 ```typescript
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type { QueryResolvers } from "@/app/api/v1/osograph/types/generated/types";
 import {
-  getOrganization,
-  getUserProfile,
-} from "@/app/api/v1/osograph/utils/auth";
-import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
-import { createWhereSchema } from "@/app/api/v1/osograph/utils/validation";
-import { queryWithPagination } from "@/app/api/v1/osograph/utils/query-helpers";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
+  type ExplicitClientQueryOptions,
+  queryWithPagination,
+} from "@/app/api/v1/osograph/utils/query-helpers";
+import { WidgetWhereSchema } from "@/app/api/v1/osograph/utils/validation";
 
-const WidgetWhereSchema = createWhereSchema("widgets");
-
-export const widgetResolvers: GraphQLResolverModule<GraphQLContext> = {
-  Query: {
-    widgets: async (
-      _: unknown,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      return queryWithPagination(args, context, {
+export const widgetQueries: Pick<QueryResolvers, "widgets"> = {
+  widgets: createResolver<QueryResolvers, "widgets">()
+    .use(withAuthenticatedClient())
+    .resolve(async (_, args, context) => {
+      const options: ExplicitClientQueryOptions<"widgets"> = {
+        client: context.client,
+        orgIds: context.orgIds,
         tableName: "widgets",
         whereSchema: WidgetWhereSchema,
-        requireAuth: true,
-        filterByUserOrgs: true,
         basePredicate: {
           is: [{ key: "deleted_at", value: null }],
         },
-      });
-    },
-  },
-
-  Widget: {
-    name: (parent: { widget_name: string }) => parent.widget_name,
-    orgId: (parent: { org_id: string }) => parent.org_id,
-    createdAt: (parent: { created_at: string }) => parent.created_at,
-    updatedAt: (parent: { updated_at: string }) => parent.updated_at,
-    creatorId: (parent: { created_by: string }) => parent.created_by,
-
-    creator: async (parent: { created_by: string }) => {
-      return getUserProfile(parent.created_by);
-    },
-
-    organization: async (parent: { org_id: string }) => {
-      return getOrganization(parent.org_id);
-    },
-  },
+      };
+      return queryWithPagination(args, context, options);
+    }),
 };
 ```
 
@@ -173,111 +172,160 @@ export const widgetResolvers: GraphQLResolverModule<GraphQLContext> = {
 
 Schema files (`.graphql`) are **automatically discovered** by `route.ts`.
 
-Add resolver to `schema/resolvers/index.ts`:
+Add the query to `schema/resolvers/user/index.ts`:
 
 ```typescript
-import { widgetResolvers } from "./widget";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
+import { widgetQueries } from "@/app/api/v1/osograph/schema/resolvers/user/widget";
 
-export const resolvers: GraphQLResolverMap<GraphQLContext> = {
-  Query: {
-    ...viewerResolvers.Query,
-    ...widgetResolvers.Query,
-    // ... other resolvers
-  },
-
-  Mutation: {
-    ...widgetResolvers.Mutation,
-    // ... other resolvers
-  },
-
-  Widget: widgetResolvers.Widget,
-  // ... other type resolvers
+export const queries = {
+  // ... existing queries
+  ...widgetQueries,
 };
 ```
+
+This automatically flows to `resolvers/index.ts` via `userQueries`.
 
 ## Adding a Mutation
 
 **1. Define Schema** (`schema/graphql/widget.graphql`)
 
 ```graphql
-input CreateWidgetInput {
-  orgId: ID!
-  name: String!
+input UpdateWidgetInput {
+  widgetId: ID!
+  name: String
 }
 
-type CreateWidgetPayload {
+type UpdateWidgetPayload {
   success: Boolean!
   widget: Widget
   message: String
 }
 
 extend type Mutation {
-  createWidget(input: CreateWidgetInput!): CreateWidgetPayload!
+  updateWidget(input: UpdateWidgetInput!): UpdateWidgetPayload!
 }
 ```
 
-**2. Create Validation Schema** (`utils/validation.ts`)
+**2. Create Validation Schema** (in `types/generated/validation.ts` via codegen, or manually in `utils/validation.ts`)
 
 ```typescript
 import { z } from "zod";
 
-export const CreateWidgetSchema = z.object({
-  orgId: z.string().uuid("Invalid organization ID"),
-  name: z.string().min(1, "Widget name is required"),
-});
+export const UpdateWidgetInputSchema = () =>
+  z.object({
+    widgetId: z.string().uuid(),
+    name: z.string().min(1).nullish(),
+  });
 ```
 
-**3. Implement Resolver** (`schema/resolvers/widget.ts`)
+**3. Implement Resolver** (`schema/resolvers/resource/widget/mutations.ts`)
 
 ```typescript
-import { validateInput } from "@/app/api/v1/osograph/utils/validation";
-import { CreateWidgetSchema } from "@/app/api/v1/osograph/utils/validation";
 import { ServerErrors } from "@/app/api/v1/osograph/utils/errors";
+import type { MutationResolvers } from "@/app/api/v1/osograph/types/generated/types";
+import { createResolversCollection } from "@/app/api/v1/osograph/utils/resolver-builder";
+import {
+  withOrgResourceClient,
+  withValidation,
+} from "@/app/api/v1/osograph/utils/resolver-middleware";
+import { UpdateWidgetInputSchema } from "@/app/api/v1/osograph/utils/validation";
 
-Mutation: {
-  createWidget: async (
-    _: unknown,
-    args: { input: { orgId: string; name: string } },
-    context: GraphQLContext,
-  ) => {
-    const user = requireAuthentication(context.user);
-    const input = validateInput(CreateWidgetSchema, args.input);
-    await requireOrgMembership(user.userId, input.orgId);
+type WidgetMutationResolvers = Pick<
+  Required<MutationResolvers>,
+  "updateWidget"
+>;
 
-    const supabase = createAdminClient();
+export const widgetMutations =
+  createResolversCollection<WidgetMutationResolvers>()
+    .defineWithBuilder("updateWidget", (builder) =>
+      builder
+        .use(withValidation(UpdateWidgetInputSchema())) // 1st: validate
+        .use(
+          withOrgResourceClient(
+            "widgets",
+            ({ args }) => args.input.widgetId,
+            "write",
+          ),
+        )
+        .resolve(async (_, { input }, context) => {
+          const { data, error } = await context.client
+            .from("widgets")
+            .update({ name: input.name })
+            .eq("id", input.widgetId)
+            .select()
+            .single();
 
-    const { data: widget, error } = await supabase
-      .from("widgets")
-      .insert({
-        org_id: input.orgId,
-        name: input.name,
-        created_by: user.userId,
-      })
-      .select()
-      .single();
-
-    if (error) throw ServerErrors.database(error.message);
-
-    return { success: true, widget, message: "Widget created successfully" };
-  },
-}
+          if (error) throw ServerErrors.database("Failed to update widget");
+          return { success: true, widget: data };
+        }),
+    )
+    .resolvers();
 ```
 
 **4. Register**
 
-Add to `schema/resolvers/index.ts`:
+Add to `schema/resolvers/resource/index.ts`:
 
 ```typescript
-export const resolvers: GraphQLResolverMap<GraphQLContext> = {
-  Mutation: {
-    ...widgetResolvers.Mutation,
-    // ... other mutations
-  },
+import { widgetMutations, widgetTypeResolvers } from "./widget";
+
+export const mutations = {
+  // ... existing mutations
+  ...widgetMutations,
 };
 ```
 
-Export the validation schema in `utils/validation.ts` so it's available for import.
+## Adding Type-Resolvers
+
+Type-resolvers map database columns (`snake_case`) to GraphQL fields (`camelCase`) and load nested resources. They live in `resource/*/type-resolvers.ts`.
+
+**Simple field mapping** — no middleware needed, just return the column value:
+
+```typescript
+Widget: {
+  orgId: (parent) => parent.org_id,
+  createdAt: (parent) => parent.created_at,
+  updatedAt: (parent) => parent.updated_at,
+},
+```
+
+**Nested/connection field** — use `createResolver` with `withOrgResourceClient` to enforce access control:
+
+```typescript
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withOrgResourceClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type { WidgetResolvers } from "@/app/api/v1/osograph/types/generated/types";
+import { queryWithPagination } from "@/app/api/v1/osograph/utils/query-helpers";
+import { WidgetRevisionWhereSchema } from "@/app/api/v1/osograph/utils/validation";
+
+Widget: {
+  orgId: (parent) => parent.org_id,
+  createdAt: (parent) => parent.created_at,
+
+  revisions: createResolver<WidgetResolvers, "revisions">()
+    .use(withOrgResourceClient("widgets", ({ parent }) => parent.id, "read"))
+    .resolve(async (parent, args, context) =>
+      queryWithPagination(args, context, {
+        client: context.client,
+        orgIds: parent.org_id,
+        tableName: "widget_revisions",
+        whereSchema: WidgetRevisionWhereSchema,
+        basePredicate: {
+          eq: [{ key: "widget_id", value: parent.id }],
+        },
+      }),
+    ),
+},
+```
+
+Register type-resolvers by spreading into `resource/index.ts`:
+
+```typescript
+export const typeResolvers = {
+  // ... existing type resolvers
+  ...widgetTypeResolvers,
+};
+```
 
 ## Filtering with Where Clauses
 
@@ -434,93 +482,52 @@ query {
 
 For the common use case of querying a single table with pagination, filtering, and org-scoped access control, use the `queryWithPagination` helper. This abstracts away all the boilerplate of validating where clauses, building predicates, and executing queries.
 
-**1. Schema is already defined** (from the example above - no additional parameters needed)
+The middleware tier handles authentication and org-scoping — pass `client` and `orgIds` explicitly from context:
 
-The `where` parameter provides flexible filtering, eliminating the need for separate singular and plural queries.
-
-**2. Create validation schema:**
+**Top-level user query** (inside `withAuthenticatedClient()` resolver):
 
 ```typescript
-import { createWhereSchema } from "@/app/api/v1/osograph/utils/validation";
-
-const WidgetWhereSchema = createWhereSchema("widgets");
-```
-
-**3. Use the helper in your resolver:**
-
-```typescript
-import { queryWithPagination } from "@/app/api/v1/osograph/utils/query-helpers";
-import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
-
-widgets: async (
-  _: unknown,
-  args: FilterableConnectionArgs,
-  context: GraphQLContext,
-) => {
-  return queryWithPagination(args, context, {
-    tableName: "widgets",
-    whereSchema: WidgetWhereSchema,
-    requireAuth: true,
-    filterByUserOrgs: true,
-    basePredicate: {
-      is: [{ key: "deleted_at", value: null }],
-    },
-  });
-};
-```
-
-**Helper Options:**
-
-| Option             | Type                 | Description                                                               |
-| ------------------ | -------------------- | ------------------------------------------------------------------------- |
-| `tableName`        | `string`             | The database table to query                                               |
-| `whereSchema`      | `ZodSchema`          | Validation schema for the where clause                                    |
-| `requireAuth`      | `boolean`            | Whether to require authentication                                         |
-| `filterByUserOrgs` | `boolean`            | If `true`, automatically filters by user's org memberships                |
-| `parentOrgIds`     | `string \| string[]` | Specific org ID(s) to filter by (used when `filterByUserOrgs` is `false`) |
-| `basePredicate`    | `QueryPredicate`     | Additional system filters (e.g., soft delete, status checks)              |
-| `errorMessage`     | `string`             | Optional custom error message                                             |
-
-**Examples:**
-
-Top-level user resources:
-
-```typescript
-// Query all resources the authenticated user can access
 return queryWithPagination(args, context, {
+  client: context.client,
+  orgIds: context.orgIds, // ← from AuthenticatedClientContext
   tableName: "notebooks",
   whereSchema: NotebookWhereSchema,
-  requireAuth: true,
-  filterByUserOrgs: true, // ← Automatically scopes to user's orgs
   basePredicate: {
     is: [{ key: "deleted_at", value: null }],
   },
 });
 ```
 
-Nested resources in field resolvers:
+**Nested resource in a type-resolver** (inside `withOrgResourceClient()` resolver):
 
 ```typescript
-// In Dataset type resolver
-dataModels: async (parent: { id: string; org_id: string }, args, context) => {
-  return queryWithPagination(args, context, {
-    tableName: "model",
-    whereSchema: DataModelWhereSchema,
-    requireAuth: false,
-    filterByUserOrgs: false,
-    parentOrgIds: parent.org_id, // ← Use parent's org_id
-    basePredicate: {
-      is: [{ key: "deleted_at", value: null }],
-      eq: [{ key: "dataset_id", value: parent.id }],
-    },
-  });
-};
+// In DataModel type resolver — revisions field
+return queryWithPagination(args, context, {
+  client: context.client,
+  orgIds: parent.org_id, // ← use parent's org_id directly
+  tableName: "model_revision",
+  whereSchema: DataModelRevisionWhereSchema,
+  basePredicate: {
+    eq: [{ key: "model_id", value: parent.id }],
+  },
+});
 ```
+
+**Helper Options (explicit-client form):**
+
+| Option          | Type                 | Description                                                  |
+| --------------- | -------------------- | ------------------------------------------------------------ |
+| `client`        | `SupabaseClient`     | The authenticated client from context                        |
+| `orgIds`        | `string \| string[]` | Org ID(s) to scope the query to                              |
+| `tableName`     | `string`             | The database table to query                                  |
+| `whereSchema`   | `ZodSchema`          | Validation schema for the where clause                       |
+| `basePredicate` | `QueryPredicate`     | Additional system filters (e.g., soft delete, status checks) |
+| `orderBy`       | `{ key, ascending }` | Optional sort order                                          |
+| `errorMessage`  | `string`             | Optional custom error message                                |
 
 The helper automatically handles:
 
-- Authentication (if `requireAuth` is `true`)
-- Organization access validation
+- Organization access validation (scoped by `orgIds`)
 - Where clause validation and parsing
 - Predicate merging (system filters + user filters)
 - Query building and execution
@@ -550,14 +557,14 @@ User-provided `where` filters are **merged** with system filters using `mergePre
 
 ### Pagination & Filtering (Recommended)
 
-For standard list queries with pagination and filtering, use the `queryWithPagination` helper:
+For standard list queries with pagination and filtering, use the `queryWithPagination` helper. Pass `client` and `orgIds` from context (set by the middleware tier):
 
 ```typescript
 return queryWithPagination(args, context, {
+  client: context.client,
+  orgIds: context.orgIds,
   tableName: "table_name",
   whereSchema: TableWhereSchema,
-  requireAuth: true,
-  filterByUserOrgs: true,
   basePredicate: {
     is: [{ key: "deleted_at", value: null }],
   },
@@ -570,7 +577,7 @@ When you need more control (e.g., complex joins, custom logic):
 
 ```typescript
 const [start, end] = preparePaginationRange(args);
-const { data, count } = await supabase
+const { data, count } = await context.client
   .from("t")
   .select("*", { count: "exact" })
   .range(start, end);
@@ -603,63 +610,41 @@ const predicate = userPredicate
 
 // Build and execute query
 const { data, count, error } = await buildQuery(
-  supabase,
+  context.client,
   "table_name",
   predicate,
   (query) => query.range(start, end),
 );
 ```
 
-### Field Mapping
-
-```typescript
-Widget: {
-  orgId: (parent: { org_id: string }) => parent.org_id,
-}
-```
-
-### Nested Resources
-
-```typescript
-Widget: {
-  organization: async (parent: { org_id: string }) => {
-    return getOrganization(parent.org_id);
-  },
-}
-```
-
 ## Best Practices
 
 **DO:**
 
+- Pick the right middleware tier (see table above) — `user/` for queries, `resource/` for mutations and type-resolvers
+- Put `withValidation()` **first** in the middleware chain, before any access-control middleware
+- Use `context.client` — never call `createAdminClient()` in resolver files
+- Use `createResolver<TResolvers, "fieldName">()` for type-safe individual resolvers
+- Use `createResolversCollection<T>()` for grouping multiple mutations
 - Use `queryWithPagination` for standard list queries (pagination + filtering + org-scoping)
-- Authenticate first: `requireAuthentication(context.user)`
-- Check org membership: `requireOrgMembership(userId, orgId)`
-- Use error helpers: `ResourceErrors.notFound()`, `ValidationErrors.invalidInput()`
-- Soft delete: `.is("deleted_at", null)`
+- Use error helpers: `ResourceErrors.notFound()`, `ServerErrors.database()`
+- Soft delete: `.is("deleted_at", null)` in `basePredicate`
 - Return connections for lists: `buildConnectionOrEmpty(items, args, count)`
-- Map DB columns: `orgId: (p) => p.org_id`
-- Return structured payloads: `{ success, resource, message }`
-- Fetch counts for pagination: `.select("*", { count: "exact" })`
-- Use validation schemas: `validateInput(Schema, input)`
-- Validate where clauses: `validateInput(createWhereSchema("table"), args.where)`
-- Merge predicates: Always combine user filters with system filters via `mergePredicates()`
-- Use appropriate operators: Match filter operators to field types (dates with `gte`/`lte`, strings with `like`/`ilike`)
-- Use type-safe query builder: `buildQuery()` for all filtered queries
+- Map DB columns in type-resolvers: `orgId: (parent) => parent.org_id`
+- Return structured payloads from mutations: `{ success, resource, message }`
+- Use generated Zod schemas from `types/generated/validation.ts` when available
 
 **DON'T:**
 
-- Skip auth checks
-- Expose raw errors: use error helpers
+- Call `createAdminClient()` in resolvers — use `context.client`
+- Skip `withValidation()` for mutations that accept user input
+- Put access-control middleware before `withValidation()`
+- Expose raw Supabase errors — wrap them with `ServerErrors.database()`
 - Hardcode pagination limits: use constants from `pagination.ts`
-- Forget soft deletes
+- Forget soft deletes in `basePredicate`
 - Mix domain logic across resolvers
 - Create custom connection types
-- Skip input validation for mutations
-- Apply user filters without validation
 - Bypass system filters when merging predicates
-- Use raw Supabase queries when filtering (use `buildQuery()` instead)
-- Allow filtering on sensitive fields without proper authorization
 
 **Naming:**
 

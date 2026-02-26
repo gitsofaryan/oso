@@ -1,51 +1,49 @@
 import { logger } from "@/lib/logger";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
 import { ServerErrors } from "@/app/api/v1/osograph/utils/errors";
+import { MutationResolvers } from "@/app/api/v1/osograph/types/generated/types";
+import { createResolversCollection } from "@/app/api/v1/osograph/utils/resolver-builder";
 import {
-  CreateStaticModelSchema,
-  validateInput,
-} from "@/app/api/v1/osograph/utils/validation";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import { getOrgScopedClient } from "@/app/api/v1/osograph/utils/access-control";
-import { MutationCreateStaticModelArgs } from "@/lib/graphql/generated/graphql";
+  withValidation,
+  withOrgScopedClient,
+} from "@/app/api/v1/osograph/utils/resolver-middleware";
+import { CreateStaticModelInputSchema } from "@/app/api/v1/osograph/types/generated/validation";
+
+type StaticModelMutationResolvers = Pick<
+  Required<MutationResolvers>,
+  "createStaticModel"
+>;
 
 /**
  * Static model mutations that operate at organization scope.
- * These resolvers use getOrgScopedClient because they don't have a resourceId yet.
+ * These resolvers use withOrgScopedClient because they don't have a resourceId yet.
  */
-export const staticModelMutations: GraphQLResolverModule<GraphQLContext>["Mutation"] =
-  {
-    createStaticModel: async (
-      _: unknown,
-      { input }: MutationCreateStaticModelArgs,
-      context: GraphQLContext,
-    ) => {
-      const validatedInput = validateInput(CreateStaticModelSchema, input);
+export const staticModelMutations =
+  createResolversCollection<StaticModelMutationResolvers>()
+    .defineWithBuilder("createStaticModel", (builder) => {
+      return builder
+        .use(withValidation(CreateStaticModelInputSchema()))
+        .use(withOrgScopedClient(({ args }) => args.input.orgId))
+        .resolve(async (_, { input }, context) => {
+          const { data, error } = await context.client
+            .from("static_model")
+            .insert({
+              org_id: input.orgId,
+              dataset_id: input.datasetId,
+              name: input.name,
+            })
+            .select()
+            .single();
 
-      const { client } = await getOrgScopedClient(
-        context,
-        validatedInput.orgId,
-      );
+          if (error) {
+            logger.error("Failed to create staticModel:", error);
+            throw ServerErrors.database("Failed to create staticModel");
+          }
 
-      const { data, error } = await client
-        .from("static_model")
-        .insert({
-          org_id: validatedInput.orgId,
-          dataset_id: validatedInput.datasetId,
-          name: validatedInput.name,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        logger.error("Failed to create staticModel:", error);
-        throw ServerErrors.database("Failed to create staticModel");
-      }
-
-      return {
-        success: true,
-        message: "StaticModel created successfully",
-        staticModel: data,
-      };
-    },
-  };
+          return {
+            success: true,
+            message: "StaticModel created successfully",
+            staticModel: data,
+          };
+        });
+    })
+    .resolvers();

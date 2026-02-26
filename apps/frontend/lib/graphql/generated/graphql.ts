@@ -1289,7 +1289,7 @@ export type CreateDatasetInput = {
   /** The description of the dataset. */
   description?: InputMaybe<Scalars["String"]["input"]>;
   /** The display name of the dataset. */
-  displayName?: InputMaybe<Scalars["String"]["input"]>;
+  displayName: Scalars["String"]["input"];
   /** The name of the dataset. This must be unique within the organization. */
   name: Scalars["String"]["input"];
   /** The organization ID the dataset belongs to */
@@ -1306,7 +1306,7 @@ export type CreateDatasetInput = {
    *   * STATIC_MODEL: This is used for datasets composed of statically uploaded
    *     models. Currently only CSV files are supported for static models.
    */
-  type?: InputMaybe<DatasetType>;
+  type: DatasetType;
 };
 
 export type CreateDatasetPayload = {
@@ -3468,8 +3468,8 @@ export type Materialization = {
   run: Run;
   runId: Scalars["ID"]["output"];
   schema?: Maybe<Array<DataModelColumn>>;
-  step: Step;
-  stepId: Scalars["ID"]["output"];
+  step?: Maybe<Step>;
+  stepId?: Maybe<Scalars["ID"]["output"]>;
 };
 
 export type MaterializationConnection = {
@@ -3594,12 +3594,12 @@ export type ModeNotFoundError = Error & {
 
 export type ModelColumnContext = {
   __typename?: "ModelColumnContext";
-  context: Scalars["String"]["output"];
+  context?: Maybe<Scalars["String"]["output"]>;
   name: Scalars["String"]["output"];
 };
 
 export type ModelColumnContextInput = {
-  context: Scalars["String"]["input"];
+  context?: InputMaybe<Scalars["String"]["input"]>;
   name: Scalars["String"]["input"];
 };
 
@@ -6413,7 +6413,8 @@ export type Query = {
    * ```json
    * {
    *   "name": { "like": "%user%" },
-   *   "is_enabled": { "eq": true }
+   *   "isEnabled": { "eq": true },
+   *   "datasetId": { "eq": "<uuid>" }
    * }
    * ```
    */
@@ -7634,8 +7635,13 @@ export type ResourceSelector = {
 
 /** Resource types that support permission-based access control */
 export enum ResourceType {
+  Chat = "CHAT",
   Dataset = "DATASET",
+  DataConnection = "DATA_CONNECTION",
+  DataIngestion = "DATA_INGESTION",
+  DataModel = "DATA_MODEL",
   Notebook = "NOTEBOOK",
+  StaticModel = "STATIC_MODEL",
 }
 
 export type ResourcesOrError =
@@ -7743,6 +7749,13 @@ export type RunCapturedLogsArgs = {
 export type RunEventConnectionArgs = {
   afterCursor?: InputMaybe<Scalars["String"]["input"]>;
   limit?: InputMaybe<Scalars["Int"]["input"]>;
+};
+
+export type RunStepsArgs = {
+  after?: InputMaybe<Scalars["String"]["input"]>;
+  first?: InputMaybe<Scalars["Int"]["input"]>;
+  single?: InputMaybe<Scalars["Boolean"]["input"]>;
+  where?: InputMaybe<Scalars["JSON"]["input"]>;
 };
 
 export type RunCanceledEvent = ErrorEvent &
@@ -8663,13 +8676,19 @@ export type Step = {
   displayName: Scalars["String"]["output"];
   finishedAt?: Maybe<Scalars["DateTimeISO"]["output"]>;
   id: Scalars["ID"]["output"];
-  logsUrl: Scalars["String"]["output"];
+  logsUrl?: Maybe<Scalars["String"]["output"]>;
   materializations: MaterializationConnection;
   name: Scalars["String"]["output"];
   run: Run;
   runId: Scalars["ID"]["output"];
   startedAt: Scalars["DateTimeISO"]["output"];
   status: StepStatus;
+};
+
+export type StepMaterializationsArgs = {
+  after?: InputMaybe<Scalars["String"]["input"]>;
+  first?: InputMaybe<Scalars["Int"]["input"]>;
+  where?: InputMaybe<Scalars["JSON"]["input"]>;
 };
 
 export type StepConnection = {
@@ -9821,7 +9840,7 @@ export type UpdateModelContextMutation = {
       columnContext?: Array<{
         __typename?: "ModelColumnContext";
         name: string;
-        context: string;
+        context?: string | null;
       }> | null;
     } | null;
   };

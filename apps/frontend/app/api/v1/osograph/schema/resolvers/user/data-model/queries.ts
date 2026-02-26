@@ -1,25 +1,20 @@
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import type { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type { QueryResolvers } from "@/app/api/v1/osograph/types/generated/types";
 import {
   ExplicitClientQueryOptions,
   queryWithPagination,
 } from "@/app/api/v1/osograph/utils/query-helpers";
-import { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
 import { DataModelWhereSchema } from "@/app/api/v1/osograph/utils/validation";
-import { getAuthenticatedClient } from "@/app/api/v1/osograph/utils/access-control";
 
-export const dataModelQueries: GraphQLResolverModule<GraphQLContext>["Query"] =
-  {
-    dataModels: async (
-      _: unknown,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client, orgIds } = await getAuthenticatedClient(context);
-
+type DataModelQueryResolvers = Pick<QueryResolvers, "dataModels">;
+export const dataModelQueries: DataModelQueryResolvers = {
+  dataModels: createResolver<QueryResolvers, "dataModels">()
+    .use(withAuthenticatedClient())
+    .resolve(async (_, args, context) => {
       const options: ExplicitClientQueryOptions<"model"> = {
-        client,
-        orgIds,
+        client: context.client,
+        orgIds: context.orgIds,
         tableName: "model",
         whereSchema: DataModelWhereSchema,
         basePredicate: {
@@ -28,5 +23,5 @@ export const dataModelQueries: GraphQLResolverModule<GraphQLContext>["Query"] =
       };
 
       return queryWithPagination(args, context, options);
-    },
-  };
+    }),
+};

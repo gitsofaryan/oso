@@ -1,10 +1,7 @@
-import {
-  getAuthenticatedClient,
-  RESOURCE_CONFIG,
-} from "@/app/api/v1/osograph/utils/access-control";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import type { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import { RESOURCE_CONFIG } from "@/app/api/v1/osograph/utils/access-control";
+import type { QueryResolvers } from "@/app/api/v1/osograph/types/generated/types";
 import {
   getFetchLimit,
   getPaginationParams,
@@ -20,120 +17,120 @@ import {
   OrganizationErrors,
   ServerErrors,
 } from "@/app/api/v1/osograph/utils/errors";
-import type {
-  QueryMarketplaceDatasetsArgs,
-  DatasetType,
-} from "@/lib/graphql/generated/graphql";
 import { logger } from "@/lib/logger";
 
-export const datasetQueries: GraphQLResolverModule<GraphQLContext>["Query"] = {
-  datasets: async (
-    _: unknown,
-    args: FilterableConnectionArgs,
-    context: GraphQLContext,
-  ) => {
-    const { client, orgIds } = await getAuthenticatedClient(context);
+type DatasetQueryResolvers = Pick<
+  Required<QueryResolvers>,
+  "datasets" | "marketplaceDatasets"
+>;
+export const datasetQueries: DatasetQueryResolvers = {
+  datasets: createResolver<DatasetQueryResolvers, "datasets">()
+    .use(withAuthenticatedClient())
+    .resolve(async (_, args, context) => {
+      const options: ExplicitClientQueryOptions<"datasets"> = {
+        client: context.client,
+        orgIds: context.orgIds,
+        tableName: "datasets",
+        whereSchema: DatasetWhereSchema,
+        basePredicate: {
+          is: [
+            { key: "deleted_at", value: null },
+            { key: "permission.revoked_at", value: null },
+          ],
+          in: [{ key: "permission.org_id", value: context.orgIds }],
+        },
+        resourceConfig: RESOURCE_CONFIG["dataset"],
+      };
 
-    const options: ExplicitClientQueryOptions<"datasets"> = {
-      client,
-      orgIds,
-      tableName: "datasets",
-      whereSchema: DatasetWhereSchema,
-      basePredicate: {
-        is: [
-          { key: "deleted_at", value: null },
-          { key: "permission.revoked_at", value: null },
-        ],
-        in: [{ key: "permission.org_id", value: orgIds }],
-      },
-      resourceConfig: RESOURCE_CONFIG["dataset"],
-    };
+      return queryWithPagination(args, context, options);
+    }),
 
-    return queryWithPagination(args, context, options);
-  },
+  marketplaceDatasets: createResolver<
+    DatasetQueryResolvers,
+    "marketplaceDatasets"
+  >()
+    .use(withAuthenticatedClient())
+    .resolve(async (_, args, context) => {
+      const { client, orgIds } = context;
 
-  marketplaceDatasets: async (
-    _: unknown,
-    args: QueryMarketplaceDatasetsArgs,
-    context: GraphQLContext,
-  ) => {
-    const { client, orgIds } = await getAuthenticatedClient(context);
+      if (!orgIds.includes(args.orgId)) {
+        logger.warn(
+          `Org ${args.orgId} attempted to access marketplace datasets, but is not part of the requesting orgs.`,
+        );
+        throw OrganizationErrors.notFound();
+      }
 
-    if (!orgIds.includes(args.orgId)) {
-      logger.warn(
-        `Org ${args.orgId} attempted to access marketplace datasets, but is not part of the requesting orgs.`,
-      );
-      throw OrganizationErrors.notFound();
-    }
+      const validatedSearch = args.search
+        ? args.search.replace(/[^a-zA-Z0-9_ ]/g, "")
+        : undefined;
 
-    const validatedSearch = args.search
-      ? args.search.replace(/[^a-zA-Z0-9_ ]/g, "")
-      : undefined;
+      // 1. Get public dataset IDs from resource_permissions
+      const { data: publicPerms, error: permsError } = await client
+        .from("resource_permissions")
+        .select("dataset_id")
+        .not("dataset_id", "is", null)
+        .is("user_id", null)
+        .is("org_id", null)
+        .is("revoked_at", null);
 
-    // 1. Get public dataset IDs from resource_permissions
-    const { data: publicPerms, error: permsError } = await client
-      .from("resource_permissions")
-      .select("dataset_id")
-      .not("dataset_id", "is", null)
-      .is("user_id", null)
-      .is("org_id", null)
-      .is("revoked_at", null);
+      if (permsError) {
+        logger.error("Failed to fetch public dataset permissions:", permsError);
+        throw ServerErrors.internal("Failed to fetch public datasets");
+      }
 
-    if (permsError) {
-      logger.error("Failed to fetch public dataset permissions:", permsError);
-      throw ServerErrors.internal("Failed to fetch public datasets");
-    }
+      const publicDatasetIds = (publicPerms ?? [])
+        .map((p) => p.dataset_id)
+        .filter((id): id is string => id !== null);
 
-    const publicDatasetIds = (publicPerms ?? [])
-      .map((p) => p.dataset_id)
-      .filter((id): id is string => id !== null);
+      if (publicDatasetIds.length === 0) {
+        return emptyConnection();
+      }
 
-    if (publicDatasetIds.length === 0) {
-      return emptyConnection();
-    }
+      // 2. Build query - join organizations for search and to avoid N+1
+      const connectionArgs = {
+        first: args.first ?? 25,
+        after: args.after ?? undefined,
+      };
+      const { offset } = getPaginationParams(connectionArgs);
+      const fetchLimit = getFetchLimit(connectionArgs);
 
-    // 2. Build query - join organizations for search and to avoid N+1
-    const connectionArgs = {
-      first: args.first ?? 25,
-      after: args.after ?? undefined,
-    };
-    const { offset } = getPaginationParams(connectionArgs);
-    const fetchLimit = getFetchLimit(connectionArgs);
-
-    let query = client
-      .from("datasets")
-      .select("*, test:organizations!inner(org_name), filter:organizations()", {
-        count: "exact",
-      })
-      .in("id", publicDatasetIds)
-      .not("org_id", "eq", args.orgId) // Exclude datasets owned by the org
-      .is("deleted_at", null);
-
-    // Search across dataset name, display_name, and organization name
-    if (validatedSearch) {
-      query = query
-        .or(
-          `name.ilike."%${validatedSearch}%",display_name.ilike."%${validatedSearch}%",filter.not.is.null`,
+      let query = client
+        .from("datasets")
+        .select(
+          "*, test:organizations!inner(org_name), filter:organizations()",
+          {
+            count: "exact",
+          },
         )
-        .ilike("filter.org_name", `%${validatedSearch}%`);
-    }
+        .in("id", publicDatasetIds)
+        .not("org_id", "eq", args.orgId) // Exclude datasets owned by the org
+        .is("deleted_at", null);
 
-    if (args.datasetType) {
-      query = query.eq("dataset_type", args.datasetType as DatasetType);
-    }
+      // Search across dataset name, display_name, and organization name
+      if (validatedSearch) {
+        query = query
+          .or(
+            `name.ilike."%${validatedSearch}%",display_name.ilike."%${validatedSearch}%",filter.not.is.null`,
+          )
+          .ilike("filter.org_name", `%${validatedSearch}%`);
+      }
 
-    // 3. Apply pagination and ordering
-    query = query
-      .order("created_at", { ascending: false })
-      .range(offset, offset + fetchLimit - 1);
+      if (args.datasetType) {
+        query = query.eq("dataset_type", args.datasetType);
+      }
 
-    const { data, count, error } = await query;
+      // 3. Apply pagination and ordering
+      query = query
+        .order("created_at", { ascending: false })
+        .range(offset, offset + fetchLimit - 1);
 
-    if (error) {
-      logger.error("Failed to fetch marketplace datasets:", error);
-      throw ServerErrors.internal("Failed to fetch marketplace datasets");
-    }
+      const { data, count, error } = await query;
 
-    return buildConnectionOrEmpty(data, connectionArgs, count);
-  },
+      if (error) {
+        logger.error("Failed to fetch marketplace datasets:", error);
+        throw ServerErrors.internal("Failed to fetch marketplace datasets");
+      }
+
+      return buildConnectionOrEmpty(data, connectionArgs, count);
+    }),
 };

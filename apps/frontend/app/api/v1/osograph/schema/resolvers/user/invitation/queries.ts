@@ -1,24 +1,19 @@
-import { getAuthenticatedClient } from "@/app/api/v1/osograph/utils/access-control";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import type { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type { QueryResolvers } from "@/app/api/v1/osograph/types/generated/types";
 import { queryWithPagination } from "@/app/api/v1/osograph/utils/query-helpers";
 import { InvitationWhereSchema } from "@/app/api/v1/osograph/utils/validation";
 
-export const invitationQueries: GraphQLResolverModule<GraphQLContext>["Query"] =
-  {
-    invitations: async (
-      _: unknown,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client, orgIds } = await getAuthenticatedClient(context);
-
+type InvitationQueryResolvers = Pick<QueryResolvers, "invitations">;
+export const invitationQueries: InvitationQueryResolvers = {
+  invitations: createResolver<QueryResolvers, "invitations">()
+    .use(withAuthenticatedClient())
+    .resolve(async (_, args, context) => {
       return queryWithPagination(args, context, {
         tableName: "invitations",
         whereSchema: InvitationWhereSchema,
-        client,
-        orgIds,
+        client: context.client,
+        orgIds: context.orgIds,
       });
-    },
-  };
+    }),
+};

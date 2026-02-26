@@ -23,6 +23,13 @@ class DatasetType(str, Enum):
     STATIC_MODEL = "STATIC_MODEL"
 
 
+class PermissionLevel(str, Enum):
+    NONE = "NONE"
+    READ = "READ"
+    WRITE = "WRITE"
+    ADMIN = "ADMIN"
+
+
 class DataConnectionType(str, Enum):
     POSTGRESQL = "POSTGRESQL"
     GSHEETS = "GSHEETS"
@@ -43,6 +50,16 @@ class DataModelKind(str, Enum):
     SCD_TYPE_2_BY_COLUMN = "SCD_TYPE_2_BY_COLUMN"
     FULL = "FULL"
     VIEW = "VIEW"
+
+
+class ResourceType(str, Enum):
+    NOTEBOOK = "NOTEBOOK"
+    CHAT = "CHAT"
+    DATASET = "DATASET"
+    DATA_MODEL = "DATA_MODEL"
+    STATIC_MODEL = "STATIC_MODEL"
+    DATA_INGESTION = "DATA_INGESTION"
+    DATA_CONNECTION = "DATA_CONNECTION"
 
 
 class RunTriggerType(str, Enum):

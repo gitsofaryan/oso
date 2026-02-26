@@ -7,7 +7,7 @@ Prevents inline type annotations in GraphQL resolver parameters. Requires using 
 This rule enforces:
 
 - Parent parameters must use Row types from `@/lib/types/schema`
-- Args parameters must use generated GraphQL types from `@/lib/graphql/generated/graphql`
+- Args parameters must not use inline object types
 
 ## Examples
 
@@ -35,21 +35,24 @@ export const notebookTypeResolvers = {
 
 ### Correct
 
+In the builder pattern, args types are inferred automatically from the
+`createResolver<TResolvers, "fieldName">()` generic — no manual annotation needed:
+
 ```typescript
-import type { MutationCreateInvitationArgs } from "@/lib/graphql/generated/graphql";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import type { MutationResolvers } from "@/lib/graphql/generated/graphql";
 
-// Using generated GraphQL type
-export const invitationMutations = {
-  createInvitation: async (
-    _: unknown,
-    args: MutationCreateInvitationArgs,
-    context: GraphQLContext,
-  ) => {
-    // ...
-  },
-};
+// Args type is inferred from the MutationResolvers["createInvitation"] generic
+createResolver<MutationResolvers, "createInvitation">()
+  .use(withOrgScopedClient(...))
+  .resolve(async (_, args, context) => {
+    // args is fully typed — no import needed
+  });
+```
 
-// Using Row type from schema
+For type resolvers, use Row types from the database schema for the parent:
+
+```typescript
 import { NotebooksRow } from "@/lib/types/schema";
 
 export const notebookTypeResolvers = {
@@ -61,15 +64,19 @@ export const notebookTypeResolvers = {
 
 ## Common Type Mappings
 
-### Args Types (Mutations)
+### Args Types
+
+In the builder pattern, args are typed automatically via
+`createResolver<TResolvers, "fieldName">()` generics. You do **not** need to
+import `Mutation*Args` or `Query*Args` types separately when using the builder.
+
+If you are writing a plain resolver function outside the builder (rare), use
+the generated types:
 
 - `createInvitation` → `MutationCreateInvitationArgs`
 - `revokeInvitation` → `MutationRevokeInvitationArgs`
 - `createDataset` → `MutationCreateDatasetArgs`
 - `updateNotebook` → `MutationUpdateNotebookArgs`
-
-### Args Types (Queries)
-
 - `getDataset` → `QueryGetDatasetArgs`
 - `listNotebooks` → `QueryListNotebooksArgs`
 

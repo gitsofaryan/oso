@@ -1,286 +1,267 @@
 import { logger } from "@/lib/logger";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
 import {
   ResourceErrors,
   ServerErrors,
 } from "@/app/api/v1/osograph/utils/errors";
-import {
-  CreateDataModelReleaseSchema,
-  CreateDataModelRevisionSchema,
-  UpdateDataModelSchema,
-  validateInput,
-} from "@/app/api/v1/osograph/utils/validation";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
 import { ModelUpdate } from "@/lib/types/schema-types";
 import { createHash } from "crypto";
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
+import type { MutationResolvers } from "@/app/api/v1/osograph/types/generated/types";
+import { createResolversCollection } from "@/app/api/v1/osograph/utils/resolver-builder";
 import {
-  MutationCreateDataModelReleaseArgs,
-  MutationCreateDataModelRevisionArgs,
-  MutationDeleteDataModelArgs,
-  MutationUpdateDataModelArgs,
-} from "@/lib/graphql/generated/graphql";
+  withOrgResourceClient,
+  withValidation,
+} from "@/app/api/v1/osograph/utils/resolver-middleware";
+import {
+  UpdateDataModelInputSchema,
+  CreateDataModelRevisionInputSchema,
+  CreateDataModelReleaseInputSchema,
+} from "@/app/api/v1/osograph/types/generated/validation";
 
-/**
- * Data model mutations that operate on existing data model resources.
- * These resolvers use getOrgResourceClient for fine-grained permission checks.
- */
-export const dataModelMutations: GraphQLResolverModule<GraphQLContext>["Mutation"] =
-  {
-    updateDataModel: async (
-      _: unknown,
-      { input }: MutationUpdateDataModelArgs,
-      context: GraphQLContext,
-    ) => {
-      const validatedInput = validateInput(UpdateDataModelSchema, input);
+type DataModelMutationResolvers = Pick<
+  Required<MutationResolvers>,
+  | "updateDataModel"
+  | "createDataModelRevision"
+  | "createDataModelRelease"
+  | "deleteDataModel"
+>;
 
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        validatedInput.dataModelId,
-        "write",
-      );
-
-      const updateData: ModelUpdate = {};
-      if (validatedInput.name !== undefined) {
-        updateData.name = validatedInput.name;
-      }
-      if (validatedInput.isEnabled !== undefined) {
-        updateData.is_enabled = validatedInput.isEnabled;
-      }
-      if (Object.keys(updateData).length > 0) {
-        updateData.updated_at = new Date().toISOString();
-      }
-
-      const { data, error } = await client
-        .from("model")
-        .update(updateData)
-        .eq("id", validatedInput.dataModelId)
-        .select()
-        .single();
-
-      if (error) {
-        logger.error("Failed to update dataModel:", error);
-        throw ServerErrors.database("Failed to update dataModel");
-      }
-
-      return {
-        success: true,
-        message: "DataModel updated successfully",
-        dataModel: data,
-      };
-    },
-
-    createDataModelRevision: async (
-      _: unknown,
-      { input }: MutationCreateDataModelRevisionArgs,
-      context: GraphQLContext,
-    ) => {
-      const validatedInput = validateInput(
-        CreateDataModelRevisionSchema,
-        input,
-      );
-
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        validatedInput.dataModelId,
-        "write",
-      );
-
-      const { data: dataModel, error: dataModelError } = await client
-        .from("model")
-        .select("org_id")
-        .eq("id", validatedInput.dataModelId)
-        .single();
-
-      if (dataModelError || !dataModel) {
-        throw ResourceErrors.notFound("DataModel", validatedInput.dataModelId);
-      }
-
-      const { data: latestRevision } = await client
-        .from("model_revision")
-        .select("*")
-        .eq("model_id", validatedInput.dataModelId)
-        .order("revision_number", { ascending: false })
-        .limit(1)
-        .single();
-
-      const hash = createHash("sha256")
-        .update(
-          JSON.stringify(
-            Object.entries(validatedInput).sort((a, b) =>
-              a[0].localeCompare(b[0]),
-            ),
+export const dataModelMutations =
+  createResolversCollection<DataModelMutationResolvers>()
+    .defineWithBuilder("updateDataModel", (builder) =>
+      builder
+        .use(withValidation(UpdateDataModelInputSchema()))
+        .use(
+          withOrgResourceClient(
+            "data_model",
+            ({ args }) => args.input.dataModelId,
+            "write",
           ),
         )
-        .digest("hex");
+        .resolve(async (_, { input }, context) => {
+          const updateData: ModelUpdate = {};
+          if (input.name != null) {
+            updateData.name = input.name;
+          }
+          if (input.isEnabled != null) {
+            updateData.is_enabled = input.isEnabled;
+          }
+          if (Object.keys(updateData).length > 0) {
+            updateData.updated_at = new Date().toISOString();
+          }
 
-      if (latestRevision?.hash === hash) {
-        return {
-          success: true,
-          message: "No changes detected, returning existing revision",
-          dataModelRevision: latestRevision,
-        };
-      }
+          const { data, error } = await context.client
+            .from("model")
+            .update(updateData)
+            .eq("id", input.dataModelId)
+            .select()
+            .single();
 
-      const revisionNumber = (latestRevision?.revision_number || 0) + 1;
+          if (error) {
+            logger.error("Failed to update dataModel:", error);
+            throw ServerErrors.database("Failed to update dataModel");
+          }
 
-      const { data, error } = await client
-        .from("model_revision")
-        .insert({
-          org_id: dataModel.org_id,
-          model_id: validatedInput.dataModelId,
-          name: validatedInput.name,
-          description: validatedInput.description,
-          revision_number: revisionNumber,
-          hash,
-          language: validatedInput.language,
-          code: validatedInput.code,
-          cron: validatedInput.cron,
-          start: validatedInput.start?.toISOString() ?? null,
-          end: validatedInput.end?.toISOString() ?? null,
-          schema: validatedInput.schema.map((col) => ({
-            name: col.name,
-            type: col.type,
-            description: col.description ?? null,
-          })),
-          depends_on: validatedInput.dependsOn?.map((d) => ({
-            model_id: d.dataModelId,
-            alias: d.alias ?? null,
-          })),
-          partitioned_by: validatedInput.partitionedBy,
-          clustered_by: validatedInput.clusteredBy,
-          kind: validatedInput.kind,
-          kind_options: validatedInput.kindOptions
-            ? {
-                time_column: validatedInput.kindOptions.timeColumn ?? null,
-                time_column_format:
-                  validatedInput.kindOptions.timeColumnFormat ?? null,
-                batch_size: validatedInput.kindOptions.batchSize ?? null,
-                lookback: validatedInput.kindOptions.lookback ?? null,
-                unique_key_columns:
-                  validatedInput.kindOptions.uniqueKeyColumns ?? null,
-                when_matched_sql:
-                  validatedInput.kindOptions.whenMatchedSql ?? null,
-                merge_filter: validatedInput.kindOptions.mergeFilter ?? null,
-                valid_from_name:
-                  validatedInput.kindOptions.validFromName ?? null,
-                valid_to_name: validatedInput.kindOptions.validToName ?? null,
-                invalidate_hard_deletes:
-                  validatedInput.kindOptions.invalidateHardDeletes ?? null,
-                updated_at_column:
-                  validatedInput.kindOptions.updatedAtColumn ?? null,
-                updated_at_as_valid_from:
-                  validatedInput.kindOptions.updatedAtAsValidFrom ?? null,
-                scd_columns: validatedInput.kindOptions.scdColumns ?? null,
-                execution_time_as_valid_from:
-                  validatedInput.kindOptions.executionTimeAsValidFrom ?? null,
-              }
-            : null,
-        })
-        .select()
-        .single();
+          return {
+            success: true,
+            message: "DataModel updated successfully",
+            dataModel: data,
+          };
+        }),
+    )
+    .defineWithBuilder("createDataModelRevision", (builder) =>
+      builder
+        .use(withValidation(CreateDataModelRevisionInputSchema()))
+        .use(
+          withOrgResourceClient(
+            "data_model",
+            ({ args }) => args.input.dataModelId,
+            "write",
+          ),
+        )
+        .resolve(async (_, { input }, context) => {
+          const { data: dataModel, error: dataModelError } =
+            await context.client
+              .from("model")
+              .select("org_id")
+              .eq("id", input.dataModelId)
+              .single();
 
-      if (error) {
-        logger.error("Failed to create dataModel revision:", error);
-        throw ServerErrors.database("Failed to create dataModel revision");
-      }
+          if (dataModelError || !dataModel) {
+            throw ResourceErrors.notFound("DataModel", input.dataModelId);
+          }
 
-      return {
-        success: true,
-        message: "DataModel revision created successfully",
-        dataModelRevision: data,
-      };
-    },
+          const { data: latestRevision } = await context.client
+            .from("model_revision")
+            .select("*")
+            .eq("model_id", input.dataModelId)
+            .order("revision_number", { ascending: false })
+            .limit(1)
+            .single();
 
-    createDataModelRelease: async (
-      _: unknown,
-      { input }: MutationCreateDataModelReleaseArgs,
-      context: GraphQLContext,
-    ) => {
-      const validatedInput = validateInput(CreateDataModelReleaseSchema, input);
+          const hash = createHash("sha256")
+            .update(
+              JSON.stringify(
+                Object.entries(input).sort((a, b) => a[0].localeCompare(b[0])),
+              ),
+            )
+            .digest("hex");
 
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        validatedInput.dataModelId,
-        "write",
-      );
+          if (latestRevision?.hash === hash) {
+            return {
+              success: true,
+              message: "No changes detected, returning existing revision",
+              dataModelRevision: latestRevision,
+            };
+          }
 
-      const { data: dataModel, error: dataModelError } = await client
-        .from("model")
-        .select("org_id")
-        .eq("id", validatedInput.dataModelId)
-        .single();
+          const revisionNumber = (latestRevision?.revision_number || 0) + 1;
 
-      if (dataModelError || !dataModel) {
-        throw ResourceErrors.notFound("DataModel", validatedInput.dataModelId);
-      }
+          const { data, error } = await context.client
+            .from("model_revision")
+            .insert({
+              org_id: dataModel.org_id,
+              model_id: input.dataModelId,
+              name: input.name,
+              description: input.description,
+              revision_number: revisionNumber,
+              hash,
+              language: input.language,
+              code: input.code,
+              cron: input.cron,
+              start: input.start ?? null,
+              end: input.end ?? null,
+              schema: input.schema.map((col) => ({
+                name: col.name,
+                type: col.type,
+                description: col.description ?? null,
+              })),
+              depends_on: input.dependsOn?.map((d) => ({
+                model_id: d.dataModelId,
+                alias: d.alias ?? null,
+              })),
+              partitioned_by: input.partitionedBy,
+              clustered_by: input.clusteredBy,
+              kind: input.kind,
+              kind_options: input.kindOptions
+                ? {
+                    time_column: input.kindOptions.timeColumn ?? null,
+                    time_column_format:
+                      input.kindOptions.timeColumnFormat ?? null,
+                    batch_size: input.kindOptions.batchSize ?? null,
+                    lookback: input.kindOptions.lookback ?? null,
+                    unique_key_columns:
+                      input.kindOptions.uniqueKeyColumns ?? null,
+                    when_matched_sql: input.kindOptions.whenMatchedSql ?? null,
+                    merge_filter: input.kindOptions.mergeFilter ?? null,
+                    valid_from_name: input.kindOptions.validFromName ?? null,
+                    valid_to_name: input.kindOptions.validToName ?? null,
+                    invalidate_hard_deletes:
+                      input.kindOptions.invalidateHardDeletes ?? null,
+                    updated_at_column:
+                      input.kindOptions.updatedAtColumn ?? null,
+                    updated_at_as_valid_from:
+                      input.kindOptions.updatedAtAsValidFrom ?? null,
+                    scd_columns: input.kindOptions.scdColumns ?? null,
+                    execution_time_as_valid_from:
+                      input.kindOptions.executionTimeAsValidFrom ?? null,
+                  }
+                : null,
+            })
+            .select()
+            .single();
 
-      const { error: revisionError } = await client
-        .from("model_revision")
-        .select("id")
-        .eq("id", validatedInput.dataModelRevisionId)
-        .eq("model_id", validatedInput.dataModelId)
-        .single();
+          if (error) {
+            logger.error("Failed to create dataModel revision:", error);
+            throw ServerErrors.database("Failed to create dataModel revision");
+          }
 
-      if (revisionError) {
-        throw ResourceErrors.notFound(
-          "DataModelRevision",
-          validatedInput.dataModelRevisionId,
-        );
-      }
+          return {
+            success: true,
+            message: "DataModel revision created successfully",
+            dataModelRevision: data,
+          };
+        }),
+    )
+    .defineWithBuilder("createDataModelRelease", (builder) =>
+      builder
+        .use(withValidation(CreateDataModelReleaseInputSchema()))
+        .use(
+          withOrgResourceClient(
+            "data_model",
+            ({ args }) => args.input.dataModelId,
+            "write",
+          ),
+        )
+        .resolve(async (_, { input }, context) => {
+          const { data: dataModel, error: dataModelError } =
+            await context.client
+              .from("model")
+              .select("org_id")
+              .eq("id", input.dataModelId)
+              .single();
 
-      const { data, error } = await client
-        .from("model_release")
-        .upsert({
-          org_id: dataModel.org_id,
-          model_id: validatedInput.dataModelId,
-          model_revision_id: validatedInput.dataModelRevisionId,
-          description: validatedInput.description,
-        })
-        .select()
-        .single();
+          if (dataModelError || !dataModel) {
+            throw ResourceErrors.notFound("DataModel", input.dataModelId);
+          }
 
-      if (error) {
-        logger.error("Failed to create dataModel release:", error);
-        throw ServerErrors.database("Failed to create dataModel release");
-      }
+          const { error: revisionError } = await context.client
+            .from("model_revision")
+            .select("id")
+            .eq("id", input.dataModelRevisionId)
+            .eq("model_id", input.dataModelId)
+            .single();
 
-      return {
-        success: true,
-        message: "DataModel release created successfully",
-        dataModelRelease: data,
-      };
-    },
+          if (revisionError) {
+            throw ResourceErrors.notFound(
+              "DataModelRevision",
+              input.dataModelRevisionId,
+            );
+          }
 
-    deleteDataModel: async (
-      _: unknown,
-      { id }: MutationDeleteDataModelArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        id,
-        "admin",
-      );
+          const { data, error } = await context.client
+            .from("model_release")
+            .upsert({
+              org_id: dataModel.org_id,
+              model_id: input.dataModelId,
+              model_revision_id: input.dataModelRevisionId,
+              description: input.description,
+            })
+            .select()
+            .single();
 
-      const { error } = await client
-        .from("model")
-        .update({ deleted_at: new Date().toISOString() })
-        .eq("id", id);
+          if (error) {
+            logger.error("Failed to create dataModel release:", error);
+            throw ServerErrors.database("Failed to create dataModel release");
+          }
 
-      if (error) {
-        throw ServerErrors.database(
-          `Failed to delete data model: ${error.message}`,
-        );
-      }
+          return {
+            success: true,
+            message: "DataModel release created successfully",
+            dataModelRelease: data,
+          };
+        }),
+    )
+    .defineWithBuilder("deleteDataModel", (builder) =>
+      builder
+        .use(
+          withOrgResourceClient("data_model", ({ args }) => args.id, "admin"),
+        )
+        .resolve(async (_, { id }, context) => {
+          const { error } = await context.client
+            .from("model")
+            .update({ deleted_at: new Date().toISOString() })
+            .eq("id", id);
 
-      return {
-        success: true,
-        message: "DataModel deleted successfully",
-      };
-    },
-  };
+          if (error) {
+            throw ServerErrors.database(
+              `Failed to delete data model: ${error.message}`,
+            );
+          }
+
+          return {
+            success: true,
+            message: "DataModel deleted successfully",
+          };
+        }),
+    )
+    .resolvers();

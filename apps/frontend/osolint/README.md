@@ -10,7 +10,7 @@ osolint/
 ├── rules/
 │   ├── access-control/
 │   │   ├── no-direct-admin-client.mjs
-│   │   └── enforce-access-tier-helpers.mjs
+│   │   └── enforce-middleware-tier.mjs
 │   └── type-safety/
 │       └── no-inline-resolver-types.mjs
 └── docs/              # Rule documentation
@@ -23,21 +23,23 @@ osolint/
 Blocks `createAdminClient` imports in `resolvers/system/`, `resolvers/user/`,
 `resolvers/organization/`, and `resolvers/resource/`.
 
-**Use these helpers instead:**
+**Use these middleware instead:**
 
-- `getSystemClient(context)`: System operations
-- `getAuthenticatedClient(context)`: User-scoped operations
-- `getOrgScopedClient(context, orgId)`: Org-scoped operations
-- `getOrgResourceClient(context, resourceType, resourceId, requiredPermission)`: Org resource access with permission overrides
+- `withSystemClient()`: System operations (use in `system/`)
+- `withAuthenticatedClient()`: User-scoped operations (use in `user/`)
+- `withOrgScopedClient(getOrgId)`: Org-scoped operations (use in `organization/`)
+- `withOrgResourceClient(type, getId, perm)`: Org resource access with permission checks (use in `resource/`)
 
-### `access-control/enforce-access-tier-helpers`
+### `access-control/enforce-middleware-tier`
 
-Enforces strict tier separation: specific helpers per directory.
+Enforces strict tier separation: specific `with*` middleware per directory.
 
-- `resolvers/system/`: Only `getSystemClient`
-- `resolvers/user/`: Only `getAuthenticatedClient`
-- `resolvers/organization/`: Only `getOrgScopedClient`
-- `resolvers/resource/`: Only `getOrgResourceClient`
+- `resolvers/system/`: Only `withSystemClient`
+- `resolvers/user/`: Only `withAuthenticatedClient`
+- `resolvers/organization/`: Only `withOrgScopedClient`
+- `resolvers/resource/`: Only `withOrgResourceClient`
+
+Cross-cutting middleware (`withValidation`, `withLogging`) is always allowed.
 
 ### `type-safety/no-inline-resolver-types`
 
@@ -71,7 +73,7 @@ export default {
   },
   rules: {
     "oso-frontend/access-control/no-direct-admin-client": "error",
-    "oso-frontend/access-control/enforce-access-tier-helpers": "error",
+    "oso-frontend/access-control/enforce-middleware-tier": "error",
     "oso-frontend/type-safety/no-inline-resolver-types": "error",
   },
 };

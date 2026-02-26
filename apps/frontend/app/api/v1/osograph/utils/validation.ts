@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { ValidationErrors } from "@/app/api/v1/osograph/utils/errors";
+import { jsonSchema } from "@/lib/types/schema";
+import { type Json } from "@/lib/types/supabase";
 import type { ValidTableName } from "@/app/api/v1/osograph/utils/query-builder";
 import { DATASET_TYPES } from "@/lib/types/dataset";
 import {
@@ -522,6 +524,18 @@ export const DataConnectionWhereSchema =
 export const DataConnectionAsTableWhereSchema = createWhereSchema(
   "data_connection_as_table",
 );
+
+/**
+ * Safely coerces an unknown value to Supabase's Json type.
+ * Throws a validation error if the value is not valid JSON-serializable data.
+ */
+export function toSupabaseJson(value: unknown): Json {
+  const result = jsonSchema.safeParse(value);
+  if (!result.success) {
+    throw ValidationErrors.invalidInput("config", "Must be a valid JSON value");
+  }
+  return result.data;
+}
 
 export function validateInput<T>(
   schema: z.ZodType<T, any, any>,

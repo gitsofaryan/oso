@@ -297,6 +297,23 @@ class GraphQLSchemaTypeTraverser:
 
         # Traverse each field
         for child_field_name, field_def, nested_selection_set in fields_to_visit:
+            # TODO: Add support for passing argument values from the visitor to allow visiting these fields as well.
+            if (
+                not is_mutation_type
+                and not is_query_type
+                and isinstance(field_def, GraphQLField)
+                and any(
+                    isinstance(arg.type, GraphQLNonNull)
+                    for arg in field_def.args.values()
+                )
+            ):
+                logger.debug(
+                    "Skipping field %s on %s: has required arguments",
+                    child_field_name,
+                    object_type.name,
+                )
+                continue
+
             # Check if this is a mutation or query field and use special handlers
             if is_mutation_type:
                 control = self._visit_mutation_field(child_field_name, field_def)

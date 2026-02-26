@@ -151,7 +151,8 @@ extend type Query {
   ```json
   {
     "name": { "like": "%user%" },
-    "is_enabled": { "eq": true }
+    "isEnabled": { "eq": true },
+    "datasetId": { "eq": "<uuid>" }
   }
   ```
   """

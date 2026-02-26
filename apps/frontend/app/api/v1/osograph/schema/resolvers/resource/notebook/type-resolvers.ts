@@ -4,54 +4,37 @@ import {
 } from "@/app/api/v1/osograph/utils/auth";
 import { getPreviewSignedUrl } from "@/lib/clients/cloudflare-r2";
 import { logger } from "@/lib/logger";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
-import { NotebooksRow } from "@/lib/types/schema-types";
+import type {
+  NotebookResolvers,
+  Resolvers,
+} from "@/app/api/v1/osograph/types/generated/types";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withOrgResourceClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
 
 const PREVIEWS_BUCKET = "notebook-previews";
 const SIGNED_URL_EXPIRY = 900;
 
-/**
- * Type resolvers for Notebook.
- * These field resolvers don't require auth checks as they operate on
- * already-fetched notebook data.
- */
-export const notebookTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
+export const notebookTypeResolvers: Pick<Resolvers, "Notebook"> = {
   Notebook: {
-    name: (parent: NotebooksRow) => parent.notebook_name,
-    createdAt: (parent: NotebooksRow) => parent.created_at,
-    updatedAt: (parent: NotebooksRow) => parent.updated_at,
-    creatorId: (parent: NotebooksRow) => parent.created_by,
-    orgId: (parent: NotebooksRow) => parent.org_id,
+    name: (parent) => parent.notebook_name,
+    createdAt: (parent) => parent.created_at,
+    updatedAt: (parent) => parent.updated_at,
+    creatorId: (parent) => parent.created_by,
+    orgId: (parent) => parent.org_id,
 
-    creator: async (
-      parent: NotebooksRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "notebook",
-        parent.id,
-      );
-      return getUserProfile(parent.created_by, client);
-    },
+    creator: createResolver<NotebookResolvers, "creator">()
+      .use(withOrgResourceClient("notebook", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) =>
+        getUserProfile(parent.created_by, context.client),
+      ),
 
-    organization: async (
-      parent: NotebooksRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "notebook",
-        parent.id,
-      );
-      return getOrganization(parent.org_id, client);
-    },
+    organization: createResolver<NotebookResolvers, "organization">()
+      .use(withOrgResourceClient("notebook", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) =>
+        getOrganization(parent.org_id, context.client),
+      ),
 
-    preview: async (parent: NotebooksRow) => {
+    preview: async (parent) => {
       try {
         const objectKey = `${parent.id}.png`;
         const signedUrl = await getPreviewSignedUrl(

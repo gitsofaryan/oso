@@ -1,25 +1,22 @@
-import { getAuthenticatedClient } from "@/app/api/v1/osograph/utils/access-control";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import type { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type { QueryResolvers } from "@/app/api/v1/osograph/types/generated/types";
 import {
   queryWithPagination,
   type ExplicitClientQueryOptions,
 } from "@/app/api/v1/osograph/utils/query-helpers";
 import { DataConnectionWhereSchema } from "@/app/api/v1/osograph/utils/validation";
 
-export const dataConnectionQueries: GraphQLResolverModule<GraphQLContext>["Query"] =
-  {
-    dataConnections: async (
-      _: unknown,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client, orgIds } = await getAuthenticatedClient(context);
-
+type DataConnectionQueryResolvers = Pick<QueryResolvers, "dataConnections">;
+export const dataConnectionQueries: DataConnectionQueryResolvers = {
+  dataConnections: createResolver<QueryResolvers, "dataConnections">()
+    .use(withAuthenticatedClient())
+    .resolve(async (_, args, context) => {
+      // NOTE: There is no dataConnections table, we just changed the name,
+      // that's why there's a name mismatch in the options
       const options: ExplicitClientQueryOptions<"dynamic_connectors"> = {
-        client,
-        orgIds,
+        client: context.client,
+        orgIds: context.orgIds,
         tableName: "dynamic_connectors",
         whereSchema: DataConnectionWhereSchema,
         basePredicate: {
@@ -28,5 +25,5 @@ export const dataConnectionQueries: GraphQLResolverModule<GraphQLContext>["Query
       };
 
       return queryWithPagination(args, context, options);
-    },
-  };
+    }),
+};

@@ -1,248 +1,238 @@
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import { requireAuthentication } from "@/app/api/v1/osograph/utils/auth";
 import {
   NotebookErrors,
   ServerErrors,
 } from "@/app/api/v1/osograph/utils/errors";
 import { putBase64Image } from "@/lib/clients/cloudflare-r2";
 import { logger } from "@/lib/logger";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import {
-  SaveNotebookPreviewSchema,
-  UpdateNotebookSchema,
-  validateBase64PngImage,
-  validateInput,
-} from "@/app/api/v1/osograph/utils/validation";
+import { validateBase64PngImage } from "@/app/api/v1/osograph/utils/validation";
 import { signOsoJwt } from "@/lib/auth/auth";
 import { createQueueService } from "@/lib/services/queue/factory";
 import { PublishNotebookRunRequest } from "@opensource-observer/osoprotobufs/publish-notebook";
 import { revalidateTag } from "next/cache";
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
+import type { MutationResolvers } from "@/app/api/v1/osograph/types/generated/types";
+import { createResolversCollection } from "@/app/api/v1/osograph/utils/resolver-builder";
 import {
-  MutationPublishNotebookArgs,
-  MutationSaveNotebookPreviewArgs,
-  MutationUnpublishNotebookArgs,
-  MutationUpdateNotebookArgs,
-} from "@/lib/graphql/generated/graphql";
+  withOrgResourceClient,
+  withValidation,
+} from "@/app/api/v1/osograph/utils/resolver-middleware";
+import {
+  UpdateNotebookInputSchema,
+  SaveNotebookPreviewInputSchema,
+} from "@/app/api/v1/osograph/types/generated/validation";
 
 const PREVIEWS_BUCKET = "notebook-previews";
 
-/**
- * Notebook mutations that operate on existing notebook resources.
- * These resolvers use getOrgResourceClient for fine-grained permission checks.
- */
-export const notebookMutations: GraphQLResolverModule<GraphQLContext>["Mutation"] =
-  {
-    updateNotebook: async (
-      _: unknown,
-      args: MutationUpdateNotebookArgs,
-      context: GraphQLContext,
-    ) => {
-      const input = validateInput(UpdateNotebookSchema, args.input);
+type NotebookMutationResolvers = Pick<
+  Required<MutationResolvers>,
+  | "updateNotebook"
+  | "saveNotebookPreview"
+  | "publishNotebook"
+  | "unpublishNotebook"
+>;
 
-      const { client } = await getOrgResourceClient(
-        context,
-        "notebook",
-        input.id,
-        "write",
-      );
+export const notebookMutations =
+  createResolversCollection<NotebookMutationResolvers>()
+    .defineWithBuilder("updateNotebook", (builder) =>
+      builder
+        .use(withValidation(UpdateNotebookInputSchema()))
+        .use(
+          withOrgResourceClient(
+            "notebook",
+            ({ args }) => args.input.id,
+            "write",
+          ),
+        )
+        .resolve(async (_, { input }, context) => {
+          const updateData: { notebook_name?: string; description?: string } =
+            {};
+          if (input.name != null) {
+            updateData.notebook_name = input.name;
+          }
+          if (input.description != null) {
+            updateData.description = input.description;
+          }
 
-      const updateData: { notebook_name?: string; description?: string } = {};
-      if (input.name !== undefined) {
-        updateData.notebook_name = input.name;
-      }
-      if (input.description !== undefined) {
-        updateData.description = input.description;
-      }
+          const { data: updated, error } = await context.client
+            .from("notebooks")
+            .update(updateData)
+            .eq("id", input.id)
+            .select()
+            .single();
 
-      const { data: updated, error } = await client
-        .from("notebooks")
-        .update(updateData)
-        .eq("id", input.id)
-        .select()
-        .single();
+          if (error) {
+            throw ServerErrors.database(
+              `Failed to update notebook: ${error.message}`,
+            );
+          }
 
-      if (error) {
-        throw ServerErrors.database(
-          `Failed to update notebook: ${error.message}`,
-        );
-      }
+          return {
+            notebook: updated,
+            message: "Notebook updated successfully",
+            success: true,
+          };
+        }),
+    )
+    .defineWithBuilder("saveNotebookPreview", (builder) =>
+      builder
+        .use(withValidation(SaveNotebookPreviewInputSchema()))
+        .use(
+          withOrgResourceClient(
+            "notebook",
+            ({ args }) => args.input.notebookId,
+            "write",
+          ),
+        )
+        .resolve(async (_, { input }) => {
+          validateBase64PngImage(input.preview);
 
-      return {
-        notebook: updated,
-        message: "Notebook updated successfully",
-        success: true,
-      };
-    },
+          try {
+            logger.log(
+              `Uploading notebook preview for ${input.notebookId} to bucket "${PREVIEWS_BUCKET}"`,
+            );
 
-    saveNotebookPreview: async (
-      _: unknown,
-      args: MutationSaveNotebookPreviewArgs,
-      context: GraphQLContext,
-    ) => {
-      const input = validateInput(SaveNotebookPreviewSchema, args.input);
-      validateBase64PngImage(input.preview);
+            await putBase64Image(
+              PREVIEWS_BUCKET,
+              `${input.notebookId}.png`,
+              input.preview,
+            );
 
-      await getOrgResourceClient(
-        context,
-        "notebook",
-        input.notebookId,
-        "write",
-      );
+            logger.log(
+              `Successfully saved notebook preview for ${input.notebookId}`,
+            );
 
-      try {
-        logger.log(
-          `Uploading notebook preview for ${input.notebookId} to bucket "${PREVIEWS_BUCKET}"`,
-        );
+            return {
+              success: true,
+              message: "Notebook preview saved successfully",
+            };
+          } catch (error) {
+            logger.error(
+              `Failed to save notebook preview for ${input.notebookId}: ${error}`,
+            );
+            throw ServerErrors.storage("Failed to save notebook preview");
+          }
+        }),
+    )
+    .defineWithBuilder("publishNotebook", (builder) =>
+      builder
+        .use(
+          withOrgResourceClient(
+            "notebook",
+            ({ args }) => args.notebookId,
+            "admin",
+          ),
+        )
+        .resolve(async (_, { notebookId }, context) => {
+          const { data: notebook } = await context.client
+            .from("notebooks")
+            .select("id, organizations!inner(id, org_name)")
+            .eq("id", notebookId)
+            .single();
 
-        await putBase64Image(
-          PREVIEWS_BUCKET,
-          `${input.notebookId}.png`,
-          input.preview,
-        );
+          if (!notebook) {
+            throw NotebookErrors.notFound();
+          }
 
-        logger.log(
-          `Successfully saved notebook preview for ${input.notebookId}`,
-        );
+          const osoToken = await signOsoJwt(context.authenticatedUser, {
+            orgId: notebook.organizations.id,
+            orgName: notebook.organizations.org_name,
+          });
 
-        return {
-          success: true,
-          message: "Notebook preview saved successfully",
-        };
-      } catch (error) {
-        logger.error(
-          `Failed to save notebook preview for ${input.notebookId}: ${error}`,
-        );
-        throw ServerErrors.storage("Failed to save notebook preview");
-      }
-    },
+          const { data: queuedRun, error: queuedRunError } =
+            await context.client
+              .from("run")
+              .insert({
+                org_id: notebook.organizations.id,
+                run_type: "manual",
+                requested_by: context.authenticatedUser.userId,
+                metadata: {
+                  notebookId: notebook.id,
+                },
+              })
+              .select()
+              .single();
+          if (queuedRunError || !queuedRun) {
+            logger.error(
+              `Error creating run for notebook ${notebook.id}: ${queuedRunError?.message}`,
+            );
+            throw ServerErrors.database("Failed to create run request");
+          }
 
-    publishNotebook: async (
-      _: unknown,
-      args: MutationPublishNotebookArgs,
-      context: GraphQLContext,
-    ) => {
-      const authenticatedUser = requireAuthentication(context.user);
-      const { notebookId } = args;
+          const queueService = createQueueService();
 
-      const { client } = await getOrgResourceClient(
-        context,
-        "notebook",
-        notebookId,
-        "admin",
-      );
-
-      const { data: notebook } = await client
-        .from("notebooks")
-        .select("id, organizations!inner(id, org_name)")
-        .eq("id", notebookId)
-        .single();
-
-      if (!notebook) {
-        throw NotebookErrors.notFound();
-      }
-
-      const osoToken = await signOsoJwt(authenticatedUser, {
-        orgId: notebook.organizations.id,
-        orgName: notebook.organizations.org_name,
-      });
-
-      const { data: queuedRun, error: queuedRunError } = await client
-        .from("run")
-        .insert({
-          org_id: notebook.organizations.id,
-          run_type: "manual",
-          requested_by: authenticatedUser.userId,
-          metadata: {
+          const runIdBuffer = Buffer.from(
+            queuedRun.id.replace(/-/g, ""),
+            "hex",
+          );
+          const publishMessage: PublishNotebookRunRequest = {
+            runId: new Uint8Array(runIdBuffer),
             notebookId: notebook.id,
-          },
-        })
-        .select()
-        .single();
-      if (queuedRunError || !queuedRun) {
-        logger.error(
-          `Error creating run for notebook ${notebook.id}: ${queuedRunError?.message}`,
-        );
-        throw ServerErrors.database("Failed to create run request");
-      }
+            osoApiKey: osoToken,
+          };
 
-      const queueService = createQueueService();
+          const result = await queueService.queueMessage({
+            queueName: "publish_notebook_run_requests",
+            message: publishMessage,
+            encoder: PublishNotebookRunRequest,
+          });
+          if (!result.success) {
+            logger.error(
+              `Failed to publish message to queue: ${result.error?.message}`,
+            );
+            throw ServerErrors.queueError(
+              result.error?.message || "Failed to publish to queue",
+            );
+          }
 
-      const runIdBuffer = Buffer.from(queuedRun.id.replace(/-/g, ""), "hex");
-      const publishMessage: PublishNotebookRunRequest = {
-        runId: new Uint8Array(runIdBuffer),
-        notebookId: notebook.id,
-        osoApiKey: osoToken,
-      };
+          return {
+            success: true,
+            run: queuedRun,
+            message: "Notebook publish run queued successfully",
+          };
+        }),
+    )
+    .defineWithBuilder("unpublishNotebook", (builder) =>
+      builder
+        .use(
+          withOrgResourceClient(
+            "notebook",
+            ({ args }) => args.notebookId,
+            "admin",
+          ),
+        )
+        .resolve(async (_, { notebookId }, context) => {
+          const { data: publishedNotebook, error } = await context.client
+            .from("published_notebooks")
+            .select("*")
+            .eq("notebook_id", notebookId)
+            .single();
+          if (error) {
+            logger.log("Failed to find published notebook:", error);
+            throw NotebookErrors.notFound();
+          }
+          const { error: deleteError } = await context.client.storage
+            .from("published-notebooks")
+            .remove([publishedNotebook.data_path]);
+          if (deleteError) {
+            logger.log("Failed to delete notebook file:", deleteError);
+            throw ServerErrors.database("Failed to delete notebook file");
+          }
+          const { error: updateError } = await context.client
+            .from("published_notebooks")
+            .update({
+              deleted_at: new Date().toISOString(),
+              updated_by: context.authenticatedUser.userId,
+            })
+            .eq("id", publishedNotebook.id);
+          if (updateError) {
+            logger.log("Failed to delete notebook file:", updateError);
+            throw ServerErrors.database("Failed to delete notebook file");
+          }
 
-      const result = await queueService.queueMessage({
-        queueName: "publish_notebook_run_requests",
-        message: publishMessage,
-        encoder: PublishNotebookRunRequest,
-      });
-      if (!result.success) {
-        logger.error(
-          `Failed to publish message to queue: ${result.error?.message}`,
-        );
-        throw ServerErrors.queueError(
-          result.error?.message || "Failed to publish to queue",
-        );
-      }
-
-      return {
-        success: true,
-        run: queuedRun,
-        message: "Notebook publish run queued successfully",
-      };
-    },
-
-    unpublishNotebook: async (
-      _: unknown,
-      args: MutationUnpublishNotebookArgs,
-      context: GraphQLContext,
-    ) => {
-      const authenticatedUser = requireAuthentication(context.user);
-      const { notebookId } = args;
-
-      const { client } = await getOrgResourceClient(
-        context,
-        "notebook",
-        notebookId,
-        "admin",
-      );
-
-      const { data: publishedNotebook, error } = await client
-        .from("published_notebooks")
-        .select("*")
-        .eq("notebook_id", notebookId)
-        .single();
-      if (error) {
-        logger.log("Failed to find published notebook:", error);
-        throw NotebookErrors.notFound();
-      }
-      const { error: deleteError } = await client.storage
-        .from("published-notebooks")
-        .remove([publishedNotebook.data_path]);
-      if (deleteError) {
-        logger.log("Failed to delete notebook file:", deleteError);
-        throw ServerErrors.database("Failed to delete notebook file");
-      }
-      const { error: updateError } = await client
-        .from("published_notebooks")
-        .update({
-          deleted_at: new Date().toISOString(),
-          updated_by: authenticatedUser.userId,
-        })
-        .eq("id", publishedNotebook.id);
-      if (updateError) {
-        logger.log("Failed to delete notebook file:", updateError);
-        throw ServerErrors.database("Failed to delete notebook file");
-      }
-
-      revalidateTag(publishedNotebook.id);
-      return {
-        success: true,
-        message: "Notebook unpublished successfully",
-      };
-    },
-  };
+          revalidateTag(publishedNotebook.id);
+          return {
+            success: true,
+            message: "Notebook unpublished successfully",
+          };
+        }),
+    )
+    .resolvers();

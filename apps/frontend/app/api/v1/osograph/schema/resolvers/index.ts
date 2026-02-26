@@ -1,53 +1,44 @@
 import { DateTimeISOResolver, GraphQLJSON } from "graphql-scalars";
-import type { GraphQLResolverMap } from "@apollo/subgraph/dist/schema-helper/resolverMap";
+import type { SafeResolverMap } from "@/app/api/v1/osograph/types/utils";
 import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
 
-import { systemResolvers } from "@/app/api/v1/osograph/schema/resolvers/system/index";
-import { organizationResolvers } from "@/app/api/v1/osograph/schema/resolvers/organization/index";
-import { resourceResolvers } from "@/app/api/v1/osograph/schema/resolvers/resource/index";
-import { userResolvers } from "@/app/api/v1/osograph/schema/resolvers/user/index";
+import {
+  queries as userQueries,
+  mutations as userMutations,
+  typeResolvers as userTypeResolvers,
+} from "@/app/api/v1/osograph/schema/resolvers/user/index";
+import {
+  mutations as organizationMutations,
+  typeResolvers as organizationTypeResolvers,
+} from "@/app/api/v1/osograph/schema/resolvers/organization/index";
+import {
+  mutations as resourceMutations,
+  typeResolvers as resourceTypeResolvers,
+} from "@/app/api/v1/osograph/schema/resolvers/resource/index";
+import {
+  queries as systemQueries,
+  mutations as systemMutations,
+  typeResolvers as systemTypeResolvers,
+} from "@/app/api/v1/osograph/schema/resolvers/system/index";
 
-export const resolvers: GraphQLResolverMap<GraphQLContext> = {
+export const resolvers = {
   DateTime: DateTimeISOResolver,
   JSON: GraphQLJSON,
 
   Query: {
-    ...userResolvers.Query,
-    ...organizationResolvers.Query,
-    ...resourceResolvers.Query,
-    ...systemResolvers.Query,
+    ...userQueries,
+    ...systemQueries,
   },
 
   Mutation: {
-    ...userResolvers.Mutation,
-    ...organizationResolvers.Mutation,
-    ...resourceResolvers.Mutation,
-    ...systemResolvers.Mutation,
+    ...userMutations,
+    ...organizationMutations,
+    ...resourceMutations,
+    ...systemMutations,
   },
 
-  Viewer: userResolvers.Viewer,
-  User: userResolvers.User,
-  Organization: organizationResolvers.Organization,
-  OrganizationMember: organizationResolvers.OrganizationMember,
-  Invitation: organizationResolvers.Invitation,
-
-  Notebook: resourceResolvers.Notebook,
-  Dataset: resourceResolvers.Dataset,
-  DataModelDefinition: resourceResolvers.DataModelDefinition,
-  StaticModelDefinition: resourceResolvers.StaticModelDefinition,
-  DataIngestionDefinition: resourceResolvers.DataIngestionDefinition,
-  DataConnectionDefinition: resourceResolvers.DataConnectionDefinition,
-  DataIngestion: resourceResolvers.DataIngestion,
-  DataModel: resourceResolvers.DataModel,
-  DataModelRevision: resourceResolvers.DataModelRevision,
-  DataModelRelease: resourceResolvers.DataModelRelease,
-  StaticModel: resourceResolvers.StaticModel,
-  DataConnection: resourceResolvers.DataConnection,
-  DataConnectionAlias: resourceResolvers.DataConnectionAlias,
-  ModelContext: resourceResolvers.ModelContext,
-
-  Run: organizationResolvers.Run,
-  Step: organizationResolvers.Step,
-  Materialization: organizationResolvers.Materialization,
-  System: systemResolvers.System,
-};
+  ...userTypeResolvers,
+  ...organizationTypeResolvers,
+  ...resourceTypeResolvers,
+  ...systemTypeResolvers,
+} satisfies SafeResolverMap<GraphQLContext>;

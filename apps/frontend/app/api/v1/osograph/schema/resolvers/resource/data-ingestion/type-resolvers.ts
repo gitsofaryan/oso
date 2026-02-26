@@ -1,113 +1,69 @@
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
-import { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import { ServerErrors } from "@/app/api/v1/osograph/utils/errors";
 import {
   getMaterializations,
   getModelContext,
 } from "@/app/api/v1/osograph/utils/resolver-helpers";
-import { logger } from "@/lib/logger";
-import { DataIngestionsRow } from "@/lib/types/schema-types";
 import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
 import {
   executePreviewQuery,
   generateTableId,
 } from "@/app/api/v1/osograph/utils/model";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import {
-  DataIngestionModelContextArgs,
-  DataIngestionPreviewDataArgs,
-  PreviewData,
-} from "@/lib/graphql/generated/graphql";
-import { requireAuthentication } from "@/app/api/v1/osograph/utils/auth";
+import type {
+  DataIngestionResolvers,
+  Resolvers,
+} from "@/app/api/v1/osograph/types/generated/types";
+import { DataIngestionFactoryTypeSchema } from "@/app/api/v1/osograph/types/generated/validation";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withOrgResourceClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import z from "zod";
 
-/**
- * Type resolvers for DataIngestion.
- * These field resolvers don't require auth checks as they operate on
- * already-fetched data ingestion data.
- */
-export const dataIngestionTypeResolvers: GraphQLResolverModule<GraphQLContext> =
-  {
-    DataIngestion: {
-      id: (parent: DataIngestionsRow) => parent.id,
-      async orgId(
-        parent: DataIngestionsRow,
-        _args: unknown,
-        context: GraphQLContext,
-      ) {
-        const { client } = await getOrgResourceClient(
-          context,
+export const dataIngestionTypeResolvers: Pick<Resolvers, "DataIngestion"> = {
+  DataIngestion: {
+    id: (parent) => parent.id,
+    orgId: (parent) => parent.org_id,
+    datasetId: (parent) => parent.dataset_id,
+    factoryType: (parent) =>
+      DataIngestionFactoryTypeSchema.parse(parent.factory_type),
+    config: (parent) => z.record(z.unknown()).parse(parent.config),
+    createdAt: (parent) => parent.created_at,
+    updatedAt: (parent) => parent.updated_at,
+    modelContext: createResolver<DataIngestionResolvers, "modelContext">()
+      .use(withOrgResourceClient("data_ingestion", ({ parent }) => parent.id))
+      .resolve(async (parent, args, context) =>
+        getModelContext(parent.dataset_id, args.tableName, context.client),
+      ),
+    materializations: async (
+      parent,
+      args: FilterableConnectionArgs & { tableName: string },
+      context,
+    ) => {
+      const { tableName, ...restArgs } = args;
+      return getMaterializations(
+        restArgs,
+        context,
+        parent.org_id,
+        parent.dataset_id,
+        generateTableId("DATA_INGESTION", tableName),
+      );
+    },
+    previewData: createResolver<DataIngestionResolvers, "previewData">()
+      .use(
+        withOrgResourceClient(
           "data_ingestion",
-          parent.id,
-        );
-        const { data: dataset, error } = await client
-          .from("datasets")
-          .select("org_id")
-          .eq("id", parent.dataset_id)
-          .single();
-
-        if (error || !dataset) {
-          logger.error(
-            `Error fetching dataset for data ingestion ${parent.id}: ${error?.message}`,
-          );
-          throw ServerErrors.database("Failed to fetch dataset");
-        }
-
-        return dataset.org_id;
-      },
-      datasetId: (parent: DataIngestionsRow) => parent.dataset_id,
-      factoryType: (parent: DataIngestionsRow) => parent.factory_type,
-      config: (parent: DataIngestionsRow) => parent.config,
-      createdAt: (parent: DataIngestionsRow) => parent.created_at,
-      updatedAt: (parent: DataIngestionsRow) => parent.updated_at,
-      modelContext: async (
-        parent: DataIngestionsRow,
-        args: DataIngestionModelContextArgs,
-        context: GraphQLContext,
-      ) => {
-        const { client } = await getOrgResourceClient(
-          context,
-          "data_ingestion",
-          parent.id,
-        );
-        return getModelContext(parent.dataset_id, args.tableName, client);
-      },
-      materializations: async (
-        parent: DataIngestionsRow,
-        args: FilterableConnectionArgs & { tableName: string },
-        context: GraphQLContext,
-      ) => {
-        const { tableName, ...restArgs } = args;
-        return getMaterializations(
-          restArgs,
-          context,
-          parent.org_id,
-          parent.dataset_id,
-          generateTableId("DATA_INGESTION", tableName),
-        );
-      },
-      previewData: async (
-        parent: DataIngestionsRow,
-        args: DataIngestionPreviewDataArgs,
-        context: GraphQLContext,
-      ): Promise<PreviewData> => {
-        const authenticatedUser = requireAuthentication(context.user);
-        const { client } = await getOrgResourceClient(
-          context,
-          "data_ingestion",
-          parent.id,
+          ({ parent }) => parent.id,
           "read",
-        );
-
+        ),
+      )
+      .resolve(async (parent, args, context) => {
         const tableId = generateTableId("DATA_INGESTION", args.tableName);
 
         return executePreviewQuery(
           parent.org_id,
           parent.dataset_id,
           tableId,
-          authenticatedUser,
+          context.authenticatedUser,
           args.tableName,
-          client,
+          context.client,
         );
-      },
-    },
-  };
+      }),
+  },
+};

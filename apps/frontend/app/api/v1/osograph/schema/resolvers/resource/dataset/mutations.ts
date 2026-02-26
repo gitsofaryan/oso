@@ -1,86 +1,73 @@
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import {
-  UpdateDatasetSchema,
-  validateInput,
-} from "@/app/api/v1/osograph/utils/validation";
 import { ServerErrors } from "@/app/api/v1/osograph/utils/errors";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
+import type { MutationResolvers } from "@/app/api/v1/osograph/types/generated/types";
+import { createResolversCollection } from "@/app/api/v1/osograph/utils/resolver-builder";
 import {
-  MutationDeleteDatasetArgs,
-  MutationUpdateDatasetArgs,
-} from "@/lib/graphql/generated/graphql";
+  withOrgResourceClient,
+  withValidation,
+} from "@/app/api/v1/osograph/utils/resolver-middleware";
+import { UpdateDatasetInputSchema } from "@/app/api/v1/osograph/types/generated/validation";
 
-/**
- * Dataset mutations that operate on existing dataset resources.
- * These resolvers use getOrgResourceClient for fine-grained permission checks.
- */
-export const datasetMutations: GraphQLResolverModule<GraphQLContext>["Mutation"] =
-  {
-    updateDataset: async (
-      _: unknown,
-      args: MutationUpdateDatasetArgs,
-      context: GraphQLContext,
-    ) => {
-      const input = validateInput(UpdateDatasetSchema, args.input);
+type DatasetMutationResolvers = Pick<
+  Required<MutationResolvers>,
+  "updateDataset" | "deleteDataset"
+>;
 
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        input.id,
-        "write",
-      );
+export const datasetMutations =
+  createResolversCollection<DatasetMutationResolvers>()
+    .defineWithBuilder("updateDataset", (builder) =>
+      builder
+        .use(withValidation(UpdateDatasetInputSchema()))
+        .use(
+          withOrgResourceClient(
+            "dataset",
+            ({ args }) => args.input.id,
+            "write",
+          ),
+        )
+        .resolve(async (_, { input }, context) => {
+          const { data, error } = await context.client
+            .from("datasets")
+            .update({
+              name: input.name ?? undefined,
+              display_name: input.displayName ?? undefined,
+              description: input.description ?? undefined,
+            })
+            .eq("id", input.id)
+            .select()
+            .single();
 
-      const { data, error } = await client
-        .from("datasets")
-        .update({
-          name: input.name,
-          display_name: input.displayName,
-          description: input.description,
-        })
-        .eq("id", input.id)
-        .select()
-        .single();
+          if (error) {
+            throw ServerErrors.database(
+              `Failed to update dataset: ${error.message}`,
+            );
+          }
 
-      if (error) {
-        throw ServerErrors.database(
-          `Failed to update dataset: ${error.message}`,
-        );
-      }
+          return {
+            dataset: data,
+            message: "Dataset updated successfully",
+            success: true,
+          };
+        }),
+    )
+    .defineWithBuilder("deleteDataset", (builder) =>
+      builder
+        .use(withOrgResourceClient("dataset", ({ args }) => args.id, "admin"))
+        .resolve(async (_, { id }, context) => {
+          const { error } = await context.client
+            .from("datasets")
+            .update({ deleted_at: new Date().toISOString() })
+            .eq("id", id);
 
-      return {
-        dataset: data,
-        message: "Dataset updated successfully",
-        success: true,
-      };
-    },
+          if (error) {
+            throw ServerErrors.database(
+              `Failed to delete dataset: ${error.message}`,
+            );
+          }
 
-    deleteDataset: async (
-      _: unknown,
-      { id }: MutationDeleteDatasetArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        id,
-        "admin",
-      );
-
-      const { error } = await client
-        .from("datasets")
-        .update({ deleted_at: new Date().toISOString() })
-        .eq("id", id);
-
-      if (error) {
-        throw ServerErrors.database(
-          `Failed to delete dataset: ${error.message}`,
-        );
-      }
-
-      return {
-        success: true,
-        message: "Dataset deleted successfully",
-      };
-    },
-  };
+          return {
+            success: true,
+            message: "Dataset deleted successfully",
+          };
+        }),
+    )
+    .resolvers();

@@ -1,5 +1,9 @@
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type {
+  Resolvers,
+  ViewerResolvers,
+} from "@/app/api/v1/osograph/types/generated/types";
 import {
   getUserOrganizationsConnection,
   getUserInvitationsConnection,
@@ -8,7 +12,6 @@ import {
   ExplicitClientQueryOptions,
   queryWithPagination,
 } from "@/app/api/v1/osograph/utils/query-helpers";
-import { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
 import {
   OrganizationWhereSchema,
   NotebookWhereSchema,
@@ -17,96 +20,77 @@ import {
   validateInput,
 } from "@/app/api/v1/osograph/utils/validation";
 import { parseWhereClause } from "@/app/api/v1/osograph/utils/where-parser";
-import { UserProfilesRow } from "@/lib/types/schema-types";
-import { getAuthenticatedClient } from "@/app/api/v1/osograph/utils/access-control";
 
 /**
  * Type resolvers for Viewer.
- * These field resolvers don't require auth checks as they operate on
- * already-fetched viewer data.
  */
-export const viewerTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
+export const viewerTypeResolvers: Pick<Resolvers, "Viewer"> = {
   Viewer: {
-    fullName: (parent: UserProfilesRow) => parent.full_name,
-    avatarUrl: (parent: UserProfilesRow) => parent.avatar_url,
+    fullName: (parent) => parent.full_name,
+    avatarUrl: (parent) => parent.avatar_url,
+    email: (parent) => parent.email ?? "",
 
-    organizations: async (
-      parent: UserProfilesRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client, orgIds } = await getAuthenticatedClient(context);
+    organizations: createResolver<ViewerResolvers, "organizations">()
+      .use(withAuthenticatedClient())
+      .resolve(async (parent, args, context) => {
+        const validatedWhere = args.where
+          ? validateInput(OrganizationWhereSchema, args.where)
+          : undefined;
 
-      const validatedWhere = args.where
-        ? validateInput(OrganizationWhereSchema, args.where)
-        : undefined;
+        return getUserOrganizationsConnection(
+          parent.id,
+          args,
+          validatedWhere ? parseWhereClause(validatedWhere) : {},
+          context.client,
+          context.orgIds,
+        );
+      }),
 
-      return getUserOrganizationsConnection(
-        parent.id,
-        args,
-        validatedWhere ? parseWhereClause(validatedWhere) : {},
-        client,
-        orgIds,
-      );
-    },
+    notebooks: createResolver<ViewerResolvers, "notebooks">()
+      .use(withAuthenticatedClient())
+      .resolve(async (_parent, args, context) => {
+        const options: ExplicitClientQueryOptions<"notebooks"> = {
+          client: context.client,
+          orgIds: context.orgIds,
+          tableName: "notebooks",
+          whereSchema: NotebookWhereSchema,
+          basePredicate: {
+            is: [{ key: "deleted_at", value: null }],
+          },
+        };
 
-    notebooks: async (
-      parent: UserProfilesRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client, orgIds } = await getAuthenticatedClient(context);
+        return queryWithPagination(args, context, options);
+      }),
 
-      const options: ExplicitClientQueryOptions<"notebooks"> = {
-        client,
-        orgIds,
-        tableName: "notebooks",
-        whereSchema: NotebookWhereSchema,
-        basePredicate: {
-          is: [{ key: "deleted_at", value: null }],
-        },
-      };
+    datasets: createResolver<ViewerResolvers, "datasets">()
+      .use(withAuthenticatedClient())
+      .resolve(async (_parent, args, context) => {
+        const options: ExplicitClientQueryOptions<"datasets"> = {
+          client: context.client,
+          orgIds: context.orgIds,
+          tableName: "datasets",
+          whereSchema: DatasetWhereSchema,
+          basePredicate: {
+            is: [{ key: "deleted_at", value: null }],
+          },
+        };
 
-      return queryWithPagination(args, context, options);
-    },
+        return queryWithPagination(args, context, options);
+      }),
 
-    datasets: async (
-      parent: UserProfilesRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client, orgIds } = await getAuthenticatedClient(context);
+    invitations: createResolver<ViewerResolvers, "invitations">()
+      .use(withAuthenticatedClient())
+      .resolve(async (parent, args, context) => {
+        const validatedWhere = args.where
+          ? validateInput(InvitationWhereSchema, args.where)
+          : undefined;
 
-      const options: ExplicitClientQueryOptions<"datasets"> = {
-        client,
-        orgIds,
-        tableName: "datasets",
-        whereSchema: DatasetWhereSchema,
-        basePredicate: {
-          is: [{ key: "deleted_at", value: null }],
-        },
-      };
-
-      return queryWithPagination(args, context, options);
-    },
-
-    invitations: async (
-      parent: UserProfilesRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getAuthenticatedClient(context);
-
-      const validatedWhere = args.where
-        ? validateInput(InvitationWhereSchema, args.where)
-        : undefined;
-
-      return getUserInvitationsConnection(
-        parent.email,
-        args,
-        validatedWhere ? parseWhereClause(validatedWhere) : {},
-        client,
-      );
-    },
+        return getUserInvitationsConnection(
+          parent.email,
+          args,
+          validatedWhere ? parseWhereClause(validatedWhere) : {},
+          context.client,
+        );
+      }),
   },
 };

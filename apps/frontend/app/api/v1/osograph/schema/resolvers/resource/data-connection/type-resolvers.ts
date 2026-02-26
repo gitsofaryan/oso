@@ -1,13 +1,12 @@
 import {
-  getOrganization,
-  requireAuthentication,
-} from "@/app/api/v1/osograph/utils/auth";
-import {
-  DynamicConnectorsRow,
-  DataConnectionAliasRow,
-} from "@/lib/types/schema-types";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
+  type DataConnectionResolvers,
+  type DataConnectionAliasResolvers,
+  type Resolvers,
+} from "@/app/api/v1/osograph/types/generated/types";
+import { DataConnectionTypeSchema } from "@/app/api/v1/osograph/types/generated/validation";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withOrgResourceClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import { getOrganization } from "@/app/api/v1/osograph/utils/auth";
 import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
 import {
   getMaterializations,
@@ -17,99 +16,78 @@ import {
   executePreviewQuery,
   generateTableId,
 } from "@/app/api/v1/osograph/utils/model";
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
-import type {
-  DataConnectionAliasModelContextArgs,
-  DataConnectionAliasPreviewDataArgs,
-  PreviewData,
-} from "@/lib/graphql/generated/graphql";
 
-/**
- * Type resolvers for DataConnection and DataConnectionAlias.
- * These field resolvers don't require auth checks as they operate on
- * already-fetched data connection data.
- */
-export const dataConnectionTypeResolvers: GraphQLResolverModule<GraphQLContext> =
-  {
-    DataConnection: {
-      orgId: (parent: DynamicConnectorsRow) => parent.org_id,
-      createdAt: (parent: DynamicConnectorsRow) => parent.created_at,
-      updatedAt: (parent: DynamicConnectorsRow) => parent.updated_at,
-      organization: async (
-        parent: DynamicConnectorsRow,
-        _args: unknown,
-        context: GraphQLContext,
-      ) => {
-        const { client } = await getOrgResourceClient(
-          context,
+export const dataConnectionTypeResolvers: Pick<
+  Resolvers,
+  "DataConnection" | "DataConnectionAlias"
+> = {
+  DataConnection: {
+    orgId: (parent) => parent.org_id,
+    createdAt: (parent) => parent.created_at,
+    updatedAt: (parent) => parent.updated_at,
+    name: (parent) => parent.connector_name,
+    type: (parent) =>
+      DataConnectionTypeSchema.parse(parent.connector_type.toUpperCase()),
+    organization: createResolver<DataConnectionResolvers, "organization">()
+      .use(
+        withOrgResourceClient(
           "data_connection",
-          parent.id,
+          ({ parent }) => parent.id,
           "read",
-        );
-        return getOrganization(parent.org_id, client);
-      },
-      name: (parent: DynamicConnectorsRow) => parent.connector_name,
-      type: (parent: DynamicConnectorsRow) =>
-        parent.connector_type.toUpperCase(),
+        ),
+      )
+      .resolve(async (parent, _args, context) =>
+        getOrganization(parent.org_id, context.client),
+      ),
+  },
+
+  DataConnectionAlias: {
+    orgId: (parent) => parent.org_id,
+    datasetId: (parent) => parent.dataset_id,
+    dataConnectionId: (parent) => parent.data_connection_id,
+    schema: (parent) => parent.schema_name,
+    materializations: async (
+      parent,
+      args: FilterableConnectionArgs & { tableName: string },
+      context,
+    ) => {
+      const { tableName, ...restArgs } = args;
+      return getMaterializations(
+        restArgs,
+        context,
+        parent.org_id,
+        parent.dataset_id,
+        generateTableId("DATA_CONNECTION", tableName),
+      );
     },
-
-    DataConnectionAlias: {
-      orgId: (parent: DataConnectionAliasRow) => parent.org_id,
-      datasetId: (parent: DataConnectionAliasRow) => parent.dataset_id,
-      dataConnectionId: (parent: DataConnectionAliasRow) =>
-        parent.data_connection_id,
-      schema: (parent: DataConnectionAliasRow) => parent.schema_name,
-      createdAt: (parent: DataConnectionAliasRow) => parent.created_at,
-      updatedAt: (parent: DataConnectionAliasRow) => parent.updated_at,
-      modelContext: async (
-        parent: DataConnectionAliasRow,
-        args: DataConnectionAliasModelContextArgs,
-        context: GraphQLContext,
-      ) => {
-        const { client } = await getOrgResourceClient(
-          context,
+    modelContext: createResolver<DataConnectionAliasResolvers, "modelContext">()
+      .use(
+        withOrgResourceClient(
           "data_connection",
-          parent.data_connection_id,
-        );
-        return getModelContext(parent.dataset_id, args.tableName, client);
-      },
-      materializations: async (
-        parent: DataConnectionAliasRow,
-        args: FilterableConnectionArgs & { tableName: string },
-        context: GraphQLContext,
-      ) => {
-        const { tableName, ...restArgs } = args;
-        return getMaterializations(
-          restArgs,
-          context,
-          parent.org_id,
-          parent.dataset_id,
-          generateTableId("DATA_CONNECTION", tableName),
-        );
-      },
-      previewData: async (
-        parent: DataConnectionAliasRow,
-        args: DataConnectionAliasPreviewDataArgs,
-        context: GraphQLContext,
-      ): Promise<PreviewData> => {
-        const authenticatedUser = requireAuthentication(context.user);
-        const { client } = await getOrgResourceClient(
-          context,
+          ({ parent }) => parent.data_connection_id,
+        ),
+      )
+      .resolve(async (parent, args, context) =>
+        getModelContext(parent.dataset_id, args.tableName, context.client),
+      ),
+    previewData: createResolver<DataConnectionAliasResolvers, "previewData">()
+      .use(
+        withOrgResourceClient(
           "data_connection",
-          parent.data_connection_id,
+          ({ parent }) => parent.data_connection_id,
           "read",
-        );
-
+        ),
+      )
+      .resolve(async (parent, args, context) => {
         const tableId = generateTableId("DATA_CONNECTION", args.tableName);
-
         return executePreviewQuery(
           parent.org_id,
           parent.dataset_id,
           tableId,
-          authenticatedUser,
+          context.authenticatedUser,
           args.tableName,
-          client,
+          context.client,
         );
-      },
-    },
-  };
+      }),
+  },
+};

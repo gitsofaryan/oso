@@ -5,8 +5,9 @@ Blocks direct `createAdminClient` imports in `resolvers/system/`,
 
 ## Why
 
-Enforces access control through validated helper functions instead of direct
-database access.
+Enforces access control through middleware instead of direct database access.
+The `with*` middleware factories encapsulate the correct client setup and
+permission checks for each resolver tier.
 
 ## Use Instead
 
@@ -14,17 +15,19 @@ database access.
 // Bad
 import { createAdminClient } from "@/lib/supabase/admin";
 
-// Good (choose based on your directory)
-import { getSystemClient } from "@/app/api/v1/osograph/utils/access-control";
-import { getAuthenticatedClient } from "@/app/api/v1/osograph/utils/access-control";
-import { getOrgScopedClient } from "@/app/api/v1/osograph/utils/access-control";
+// Good — use with* middleware in your resolver chain
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+
+createResolver<QueryResolvers, "widgets">()
+  .use(withAuthenticatedClient())
+  .resolve(async (_, args, context) => {
+    // context.client is provided by the middleware
+  });
 ```
 
-## Available Helpers
+## Available Middleware
 
-- `getSystemClient(context)` - System operations (use in `system/`)
-- `getAuthenticatedClient(context)` - User-scoped operations (use in `user/`)
-- `getOrgScopedClient(context, orgId)` - Org-scoped operations (use in
-  `organization/`)
-- `getOrgResourceClient(context, resourceType, resourceId)` - Org and
-  resource-scoped operations (use in `resource/`)
+- `withSystemClient()` - System operations (use in `system/`)
+- `withAuthenticatedClient()` - User-scoped operations (use in `user/`)
+- `withOrgScopedClient(getOrgId)` - Org-scoped operations (use in `organization/`)
+- `withOrgResourceClient(type, getId, perm)` - Org and resource-scoped operations (use in `resource/`)

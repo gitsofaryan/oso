@@ -44,7 +44,7 @@ export default createRule({
     },
     messages: {
       noDirectAdminClient:
-        "Direct use of createAdminClient is not allowed in resolvers. Use access control helpers from utils/access-control.ts instead (getSystemClient, getAuthenticatedClient, getOrgScopedClient, getOrgResourceClient).",
+        "Direct use of createAdminClient is not allowed in resolvers. Use middleware from utils/resolver-middleware.ts instead (withSystemClient, withAuthenticatedClient, withOrgScopedClient, withOrgResourceClient).",
     },
     schema: [],
   },

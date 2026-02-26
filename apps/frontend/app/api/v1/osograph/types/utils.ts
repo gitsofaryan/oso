@@ -1,23 +1,25 @@
-import type { GraphQLScalarType } from "graphql";
-import type { GraphQLResolverMap } from "@apollo/subgraph/dist/schema-helper/resolverMap";
+import type { GraphQLFieldResolver, GraphQLScalarType } from "graphql";
+import type {
+  IsTypeOfResolverFn,
+  TypeResolveFn,
+} from "@/app/api/v1/osograph/types/generated/types";
 
-/**
- * Helper type to determine if a resolver map value is a resolver object
- * (i.e., not a scalar or enum).
- */
-type IsResolverObject<T> = T extends GraphQLScalarType
-  ? never
-  : T extends { [key: string]: string | number }
-    ? T extends { [key: string]: (...args: never[]) => unknown }
-      ? T
-      : never
-    : T;
-
-/**
- * Type for partial GraphQL resolver modules.
- * This is the same as `GraphQLResolverMap` but excludes `scalars` and `enums`,
- * so it only allows resolver objects (`Query`, `Mutation`, and type resolvers).
- */
-export type GraphQLResolverModule<TContext = unknown> = {
-  [typeName: string]: IsResolverObject<GraphQLResolverMap<TContext>[string]>;
+// @apollo/subgraph's GraphQLResolverMap index signature doesn't accommodate
+// __isTypeOf / __resolveType, which codegen adds to union-member resolver types.
+// This local type widens the index signature to avoid false-positive TS errors.
+export type SafeResolverMap<TContext> = {
+  [typeName: string]:
+    | GraphQLScalarType
+    | { [enumValue: string]: string | number }
+    | {
+        [fieldName: string]:
+          | GraphQLFieldResolver<never, TContext>
+          | IsTypeOfResolverFn<never, TContext>
+          | TypeResolveFn<string, never, TContext>
+          | {
+              requires?: string;
+              resolve?: GraphQLFieldResolver<never, TContext>;
+              subscribe?: GraphQLFieldResolver<never, TContext>;
+            };
+      };
 };

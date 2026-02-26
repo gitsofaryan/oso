@@ -12,6 +12,8 @@ from .enums import (
     DataModelKind,
     DatasetType,
     MemberRole,
+    PermissionLevel,
+    ResourceType,
     RunStatus,
     StepStatus,
 )
@@ -107,16 +109,26 @@ class CreateDataModelReleaseInput(BaseModel):
     description: Optional[str] = None
 
 
+class SubscribeToDatasetInput(BaseModel):
+    dataset_id: str = Field(alias="datasetId")
+    org_id: str = Field(alias="orgId")
+
+
+class UnsubscribeFromDatasetInput(BaseModel):
+    dataset_id: str = Field(alias="datasetId")
+    org_id: str = Field(alias="orgId")
+
+
 class CreateDatasetInput(BaseModel):
     org_id: str = Field(alias="orgId")
     "The organization ID the dataset belongs to"
     name: str
     "The name of the dataset. This must be unique within the organization."
-    display_name: Optional[str] = Field(alias="displayName", default=None)
+    display_name: str = Field(alias="displayName")
     "The display name of the dataset."
     description: Optional[str] = None
     "The description of the dataset."
-    type: Optional[DatasetType] = DatasetType.USER_MODEL
+    type: DatasetType
     "The type of the dataset.\n\nTypes:\n  * USER_MODEL: Sometimes called a UDM, this dataset type contains\n    user-defined data models.\n  * DATA_INGESTION: This dataset type is used for datasets that are ingested\n    from external sources using strategies like REST/GraphQL APIs, file\n    uploads, etc.\n  * STATIC_MODEL: This is used for datasets composed of statically uploaded\n    models. Currently only CSV files are supported for static models."
 
 
@@ -144,7 +156,7 @@ class RevokeInvitationInput(BaseModel):
 
 class ModelColumnContextInput(BaseModel):
     name: str
-    context: str
+    context: Optional[str] = None
 
 
 class UpdateModelContextInput(BaseModel):
@@ -188,6 +200,21 @@ class UpdateMemberRoleInput(BaseModel):
     org_id: str = Field(alias="orgId")
     user_id: str = Field(alias="userId")
     role: MemberRole
+
+
+class GrantResourcePermissionInput(BaseModel):
+    """Input for granting resource permissions"""
+
+    id: str
+    "The resource ID to grant permission for"
+    resource_type: ResourceType = Field(alias="resourceType")
+    "The type of resource (notebook, dataset, etc.)"
+    permission_level: PermissionLevel = Field(alias="permissionLevel")
+    "The permission level to grant (NONE, READ, WRITE, ADMIN, OWNER)"
+    target_user_id: Optional[str] = Field(alias="targetUserId", default=None)
+    "Optional: Target user ID to grant permission to.\nIf null, the permission applies to organizations or is public."
+    target_org_id: Optional[str] = Field(alias="targetOrgId", default=None)
+    "Optional: Target organization ID to grant permission to.\nIf both targetUserId and targetOrgId are null, the permission is public."
 
 
 class CreateUserModelRunRequestInput(BaseModel):

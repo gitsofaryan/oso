@@ -25,7 +25,7 @@ export default defineConfig(
     ...rootConfig,
     includeIgnoreFile(gitignorePath),
     {
-      ignores: ["lib/graphql/generated/**", "public/**"],
+      ignores: ["lib/graphql/generated/**", "public/**", "app/api/v1/osograph/types/generated/**"],
     },
     ...fixupConfigRules(
       compat.extends("next/core-web-vitals", "plugin:storybook/recommended"),
@@ -85,6 +85,7 @@ export default defineConfig(
         "@typescript-eslint/no-deprecated": "error",
         "oso-frontend/type-safety/no-inline-resolver-types": "error",
         "oso-frontend/type-safety/explicit-return-types": "off",
+        "@typescript-eslint/no-unsafe-type-assertion": "error",
       },
     },
     {
@@ -96,7 +97,7 @@ export default defineConfig(
 
       rules: {
         "oso-frontend/access-control/no-direct-admin-client": "error",
-        "oso-frontend/access-control/enforce-access-tier-helpers": "error",
+        "oso-frontend/access-control/enforce-middleware-tier": "error",
       },
     },
   ]),

@@ -53,6 +53,7 @@ const handler = startServerAndCreateNextHandler<NextRequest>(server, {
       authCache: {
         orgMemberships: new Map(),
         resourcePermissions: new Map(),
+        resourceOrgIds: new Map(),
         orgIds: new Map(),
       },
     } satisfies GraphQLContext;

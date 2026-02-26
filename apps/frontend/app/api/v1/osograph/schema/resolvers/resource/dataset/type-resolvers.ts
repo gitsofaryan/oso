@@ -1,9 +1,8 @@
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
 import {
   getOrganization,
   getUserProfile,
 } from "@/app/api/v1/osograph/utils/auth";
+import { ResourceErrors } from "@/app/api/v1/osograph/utils/errors";
 import {
   DataIngestionsWhereSchema,
   DataModelWhereSchema,
@@ -13,121 +12,72 @@ import {
   DataConnectionAsTableWhereSchema,
 } from "@/app/api/v1/osograph/utils/validation";
 import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
 import { queryWithPagination } from "@/app/api/v1/osograph/utils/query-helpers";
 import { assertNever } from "@opensource-observer/utils";
-import {
-  DataConnectionAsTableRow,
-  DataIngestionAsTableRow,
-  DatasetsRow,
-} from "@/lib/types/schema-types";
-import { Connection } from "@/app/api/v1/osograph/utils/connection";
-import { getMaterializations } from "@/app/api/v1/osograph/utils/resolver-helpers";
-import { generateTableId } from "@/app/api/v1/osograph/utils/model";
-import { DatasetIsSubscribedArgs } from "@/lib/graphql/generated/graphql";
+import type {
+  DatasetResolvers,
+  DataModelDefinitionResolvers,
+  StaticModelDefinitionResolvers,
+  DataIngestionDefinitionResolvers,
+  DataConnectionDefinitionResolvers,
+  Resolvers,
+} from "@/app/api/v1/osograph/types/generated/types";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withOrgResourceClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
 
-/**
- * These types represent intermediate resolver objects for GraphQL union type handling.
- * They're NOT database row types - they're lightweight context carriers created in
- * Dataset.typeDefinition to pass org_id/dataset_id to child resolvers.
- * Inlined here because they're resolver implementation details used only in this file.
- */
-type DataModelDefinitionParent = { org_id: string; dataset_id: string };
-type StaticModelDefinitionParent = { org_id: string; dataset_id: string };
-type DataIngestionDefinitionParent = { org_id: string; dataset_id: string };
-type DataConnectionDefinitionParent = { org_id: string; dataset_id: string };
-
-/**
- * Type resolvers for Dataset and related types.
- * These field resolvers don't require auth checks as they operate on
- * already-fetched dataset data.
- */
-export const datasetTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
+export const datasetTypeResolvers: Pick<
+  Resolvers,
+  | "Dataset"
+  | "DataModelDefinition"
+  | "StaticModelDefinition"
+  | "DataIngestionDefinition"
+  | "DataConnectionDefinition"
+  | "Table"
+> = {
   Dataset: {
-    displayName: (parent: DatasetsRow) => parent.display_name,
-    createdAt: (parent: DatasetsRow) => parent.created_at,
-    updatedAt: (parent: DatasetsRow) => parent.updated_at,
-    creatorId: (parent: DatasetsRow) => parent.created_by,
-    orgId: (parent: DatasetsRow) => parent.org_id,
-    type: (parent: DatasetsRow) => parent.dataset_type,
+    displayName: (parent) => parent.display_name,
+    createdAt: (parent) => parent.created_at,
+    updatedAt: (parent) => parent.updated_at,
+    creatorId: (parent) => parent.created_by,
+    orgId: (parent) => parent.org_id,
+    type: (parent) => parent.dataset_type,
 
-    isSubscribed: async (
-      parent: DatasetsRow,
-      args: DatasetIsSubscribedArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.id,
-        "read",
-      );
+    isSubscribed: createResolver<DatasetResolvers, "isSubscribed">()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id, "read"))
+      .resolve(async (parent, args, context) => {
+        const { data } = await context.client
+          .from("resource_permissions")
+          .select("id")
+          .eq("dataset_id", parent.id)
+          .eq("org_id", args.orgId)
+          .is("user_id", null)
+          .is("revoked_at", null)
+          .maybeSingle();
+        return !!data;
+      }),
 
-      const { data } = await client
-        .from("resource_permissions")
-        .select("id")
-        .eq("dataset_id", parent.id)
-        .eq("org_id", args.orgId)
-        .is("user_id", null)
-        .is("revoked_at", null)
-        .maybeSingle();
-      return !!data;
-    },
+    creator: createResolver<DatasetResolvers, "creator">()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) =>
+        getUserProfile(parent.created_by, context.client),
+      ),
 
-    creator: async (
-      parent: DatasetsRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.id,
-      );
-      return getUserProfile(parent.created_by, client);
-    },
+    organization: createResolver<DatasetResolvers, "organization">()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) =>
+        getOrganization(parent.org_id, context.client),
+      ),
 
-    organization: async (
-      parent: DatasetsRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.id,
-      );
-      return getOrganization(parent.org_id, client);
-    },
-
-    typeDefinition: async (parent: DatasetsRow) => {
+    typeDefinition: async (parent) => {
       switch (parent.dataset_type) {
-        case "USER_MODEL": {
-          return {
-            __typename: "DataModelDefinition",
-            org_id: parent.org_id,
-            dataset_id: parent.id,
-          };
-        }
+        case "USER_MODEL":
+          return { __typename: "DataModelDefinition" as const, ...parent };
         case "STATIC_MODEL":
-          return {
-            __typename: "StaticModelDefinition",
-            org_id: parent.org_id,
-            dataset_id: parent.id,
-          };
-        case "DATA_INGESTION": {
-          return {
-            __typename: "DataIngestionDefinition",
-            org_id: parent.org_id,
-            dataset_id: parent.id,
-          };
-        }
+          return { __typename: "StaticModelDefinition" as const, ...parent };
+        case "DATA_INGESTION":
+          return { __typename: "DataIngestionDefinition" as const, ...parent };
         case "DATA_CONNECTION":
-          return {
-            __typename: "DataConnectionDefinition",
-            org_id: parent.org_id,
-            dataset_id: parent.id,
-          };
+          return { __typename: "DataConnectionDefinition" as const, ...parent };
         default:
           assertNever(
             parent.dataset_type,
@@ -136,289 +86,181 @@ export const datasetTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
       }
     },
 
-    tables: async (
-      parent: DatasetsRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      switch (parent.dataset_type) {
-        case "USER_MODEL": {
-          const { client } = await getOrgResourceClient(
-            context,
-            "dataset",
-            parent.id,
-            "read",
-          );
-
-          return queryWithPagination(args, context, {
-            client,
-            orgIds: parent.org_id,
-            tableName: "model",
-            whereSchema: DataModelWhereSchema,
-            basePredicate: {
-              is: [{ key: "deleted_at", value: null }],
-              eq: [{ key: "dataset_id", value: parent.id }],
-            },
-          });
-        }
-        case "STATIC_MODEL": {
-          const { client } = await getOrgResourceClient(
-            context,
-            "dataset",
-            parent.id,
-            "read",
-          );
-
-          return queryWithPagination(args, context, {
-            client,
-            orgIds: parent.org_id,
-            tableName: "static_model",
-            whereSchema: StaticModelWhereSchema,
-            basePredicate: {
-              is: [{ key: "deleted_at", value: null }],
-              eq: [{ key: "dataset_id", value: parent.id }],
-            },
-          });
-        }
-        case "DATA_INGESTION": {
-          const { client } = await getOrgResourceClient(
-            context,
-            "dataset",
-            parent.id,
-            "read",
-          );
-
-          const result = (await queryWithPagination(args, context, {
-            client,
-            orgIds: parent.org_id,
-            tableName: "data_ingestion_as_table",
-            whereSchema: DataIngestionsWhereSchema,
-            basePredicate: {
-              eq: [{ key: "dataset_id", value: parent.id }],
-            },
-          })) as Connection<DataIngestionAsTableRow>;
-
-          return {
-            ...result,
-            edges: result.edges.map((edge) => ({
-              node: {
-                id: edge.node.table_id,
-                name: edge.node.table_name,
-                datasetId: edge.node.dataset_id,
+    tables: createResolver<DatasetResolvers, "tables">()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id, "read"))
+      .resolve(async (parent, args: FilterableConnectionArgs, context) => {
+        switch (parent.dataset_type) {
+          case "USER_MODEL":
+            return queryWithPagination(args, context, {
+              client: context.client,
+              orgIds: parent.org_id,
+              tableName: "model_as_table",
+              whereSchema: DataModelWhereSchema,
+              basePredicate: {
+                eq: [{ key: "dataset_id", value: parent.id }],
               },
-              cursor: edge.cursor,
-            })),
-          };
-        }
-        case "DATA_CONNECTION": {
-          const { client } = await getOrgResourceClient(
-            context,
-            "dataset",
-            parent.id,
-            "read",
-          );
-
-          const result = (await queryWithPagination(args, context, {
-            client,
-            orgIds: parent.org_id,
-            tableName: "data_connection_as_table",
-            whereSchema: DataConnectionAsTableWhereSchema,
-            basePredicate: {
-              eq: [{ key: "dataset_id", value: parent.id }],
-            },
-          })) as Connection<DataConnectionAsTableRow>;
-
-          return {
-            ...result,
-            edges: result.edges.map((edge) => ({
-              node: {
-                id: edge.node.table_id,
-                name: edge.node.table_name,
-                datasetId: edge.node.dataset_id,
+            });
+          case "STATIC_MODEL":
+            return queryWithPagination(args, context, {
+              client: context.client,
+              orgIds: parent.org_id,
+              tableName: "static_model_as_table",
+              whereSchema: StaticModelWhereSchema,
+              basePredicate: {
+                eq: [{ key: "dataset_id", value: parent.id }],
               },
-              cursor: edge.cursor,
-            })),
-          };
+            });
+          case "DATA_INGESTION":
+            return queryWithPagination(args, context, {
+              client: context.client,
+              orgIds: parent.org_id,
+              tableName: "data_ingestion_as_table",
+              whereSchema: DataIngestionsWhereSchema,
+              basePredicate: {
+                eq: [{ key: "dataset_id", value: parent.id }],
+              },
+            });
+          case "DATA_CONNECTION":
+            return queryWithPagination(args, context, {
+              client: context.client,
+              orgIds: parent.org_id,
+              tableName: "data_connection_as_table",
+              whereSchema: DataConnectionAsTableWhereSchema,
+              basePredicate: {
+                eq: [{ key: "dataset_id", value: parent.id }],
+              },
+            });
+          default:
+            assertNever(
+              parent.dataset_type,
+              `Unknown dataset type: ${parent.dataset_type}`,
+            );
         }
-        default:
-          assertNever(
-            parent.dataset_type,
-            `Unknown dataset type: ${parent.dataset_type}`,
-          );
-      }
-    },
+      }),
 
-    runs: async (
-      parent: DatasetsRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.id,
-      );
+    runs: createResolver<DatasetResolvers, "runs">()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id))
+      .resolve(async (parent, args: FilterableConnectionArgs, context) =>
+        queryWithPagination(args, context, {
+          client: context.client,
+          orgIds: parent.org_id,
+          tableName: "run",
+          whereSchema: RunWhereSchema,
+          basePredicate: {
+            eq: [{ key: "dataset_id", value: parent.id }],
+          },
+          orderBy: {
+            key: "queued_at",
+            ascending: false,
+          },
+        }),
+      ),
 
-      return queryWithPagination(args, context, {
-        client,
-        orgIds: parent.org_id,
-        tableName: "run",
-        whereSchema: RunWhereSchema,
-        basePredicate: {
-          eq: [{ key: "dataset_id", value: parent.id }],
-        },
-        orderBy: {
-          key: "queued_at",
-          ascending: false,
-        },
-      });
-    },
-
-    materializations: async (
-      parent: DatasetsRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.id,
-        "read",
-      );
-
-      return queryWithPagination(args, context, {
-        client,
-        orgIds: parent.org_id,
-        tableName: "materialization",
-        whereSchema: MaterializationWhereSchema,
-        basePredicate: {
-          eq: [{ key: "dataset_id", value: parent.id }],
-        },
-        orderBy: {
-          key: "created_at",
-          ascending: false,
-        },
-      });
-    },
+    materializations: createResolver<DatasetResolvers, "materializations">()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id, "read"))
+      .resolve(async (parent, args: FilterableConnectionArgs, context) =>
+        queryWithPagination(args, context, {
+          client: context.client,
+          orgIds: parent.org_id,
+          tableName: "materialization",
+          whereSchema: MaterializationWhereSchema,
+          basePredicate: {
+            eq: [{ key: "dataset_id", value: parent.id }],
+          },
+          orderBy: {
+            key: "created_at",
+            ascending: false,
+          },
+        }),
+      ),
   },
 
   DataModelDefinition: {
-    orgId: (parent: DatasetsRow) => parent.org_id,
-    datasetId: (parent: DataModelDefinitionParent) => parent.dataset_id,
-    dataModels: async (
-      parent: DataModelDefinitionParent,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.dataset_id,
-        "read",
-      );
-
-      return queryWithPagination(args, context, {
-        client,
-        orgIds: parent.org_id,
-        tableName: "model",
-        whereSchema: DataModelWhereSchema,
-        basePredicate: {
-          is: [{ key: "deleted_at", value: null }],
-          eq: [{ key: "dataset_id", value: parent.dataset_id }],
-        },
-      });
-    },
+    orgId: (parent) => parent.org_id,
+    datasetId: (parent) => parent.id,
+    dataModels: createResolver<DataModelDefinitionResolvers, "dataModels">()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id, "read"))
+      .resolve(async (parent, args: FilterableConnectionArgs, context) =>
+        queryWithPagination(args, context, {
+          client: context.client,
+          orgIds: parent.org_id,
+          tableName: "model",
+          whereSchema: DataModelWhereSchema,
+          basePredicate: {
+            is: [{ key: "deleted_at", value: null }],
+            eq: [{ key: "dataset_id", value: parent.id }],
+          },
+        }),
+      ),
   },
 
   StaticModelDefinition: {
-    orgId: (parent: StaticModelDefinitionParent) => parent.org_id,
-    datasetId: (parent: StaticModelDefinitionParent) => parent.dataset_id,
-    staticModels: async (
-      parent: StaticModelDefinitionParent,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.dataset_id,
-        "read",
-      );
-
-      return queryWithPagination(args, context, {
-        client,
-        orgIds: parent.org_id,
-        tableName: "static_model",
-        whereSchema: StaticModelWhereSchema,
-        basePredicate: {
-          is: [{ key: "deleted_at", value: null }],
-          eq: [{ key: "dataset_id", value: parent.dataset_id }],
-        },
-      });
-    },
+    orgId: (parent) => parent.org_id,
+    datasetId: (parent) => parent.id,
+    staticModels: createResolver<
+      StaticModelDefinitionResolvers,
+      "staticModels"
+    >()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id, "read"))
+      .resolve(async (parent, args: FilterableConnectionArgs, context) =>
+        queryWithPagination(args, context, {
+          client: context.client,
+          orgIds: parent.org_id,
+          tableName: "static_model",
+          whereSchema: StaticModelWhereSchema,
+          basePredicate: {
+            is: [{ key: "deleted_at", value: null }],
+            eq: [{ key: "dataset_id", value: parent.id }],
+          },
+        }),
+      ),
   },
 
   DataIngestionDefinition: {
-    orgId: (parent: DataIngestionDefinitionParent) => parent.org_id,
-    datasetId: (parent: DataIngestionDefinitionParent) => parent.dataset_id,
-    dataIngestion: async (
-      parent: DataIngestionDefinitionParent,
-      _args: Record<string, never>,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.dataset_id,
-      );
+    orgId: (parent) => parent.org_id,
+    datasetId: (parent) => parent.id,
+    dataIngestion: createResolver<
+      DataIngestionDefinitionResolvers,
+      "dataIngestion"
+    >()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) => {
+        const { data: config } = await context.client
+          .from("data_ingestions")
+          .select("*")
+          .eq("dataset_id", parent.id)
+          .is("deleted_at", null)
+          .maybeSingle();
 
-      const { data: config } = await client
-        .from("data_ingestions")
-        .select("*")
-        .eq("dataset_id", parent.dataset_id)
-        .is("deleted_at", null)
-        .maybeSingle();
-
-      return config;
-    },
-    materializations: async (
-      parent: DataIngestionDefinitionParent,
-      args: FilterableConnectionArgs & { tableName: string },
-      context: GraphQLContext,
-    ) => {
-      const { tableName, ...restArgs } = args;
-      return getMaterializations(
-        restArgs,
-        context,
-        parent.org_id,
-        parent.dataset_id,
-        generateTableId("DATA_INGESTION", tableName),
-      );
-    },
+        return config;
+      }),
   },
 
   DataConnectionDefinition: {
-    orgId: (parent: DataConnectionDefinitionParent) => parent.org_id,
-    datasetId: (parent: DataConnectionDefinitionParent) => parent.dataset_id,
-    dataConnectionAlias: async (
-      parent: DataConnectionDefinitionParent,
-      _args: Record<string, never>,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "dataset",
-        parent.dataset_id,
-      );
+    orgId: (parent) => parent.org_id,
+    datasetId: (parent) => parent.id,
+    dataConnectionAlias: createResolver<
+      DataConnectionDefinitionResolvers,
+      "dataConnectionAlias"
+    >()
+      .use(withOrgResourceClient("dataset", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) => {
+        const { data: alias } = await context.client
+          .from("data_connection_alias")
+          .select("*")
+          .eq("dataset_id", parent.id)
+          .is("deleted_at", null)
+          .maybeSingle();
 
-      const { data: alias } = await client
-        .from("data_connection_alias")
-        .select("*")
-        .eq("dataset_id", parent.dataset_id)
-        .is("deleted_at", null)
-        .maybeSingle();
+        if (!alias)
+          throw ResourceErrors.notFound("DataConnectionAlias", parent.id);
+        return alias;
+      }),
+  },
 
-      return alias;
-    },
+  Table: {
+    id: (parent) => parent.table_id!,
+    name: (parent) => parent.table_name!,
+    datasetId: (parent) => parent.dataset_id!,
   },
 };

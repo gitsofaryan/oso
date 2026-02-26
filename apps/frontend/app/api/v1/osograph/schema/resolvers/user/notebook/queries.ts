@@ -1,31 +1,27 @@
-import { getAuthenticatedClient } from "@/app/api/v1/osograph/utils/access-control";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import type { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
-import type { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type { QueryResolvers } from "@/app/api/v1/osograph/types/generated/types";
 import {
   type ExplicitClientQueryOptions,
   queryWithPagination,
 } from "@/app/api/v1/osograph/utils/query-helpers";
 import { NotebookWhereSchema } from "@/app/api/v1/osograph/utils/validation";
 
-export const notebookQueries: GraphQLResolverModule<GraphQLContext>["Query"] = {
-  notebooks: async (
-    _: unknown,
-    args: FilterableConnectionArgs,
-    context: GraphQLContext,
-  ) => {
-    const { client, orgIds } = await getAuthenticatedClient(context);
+type NotebookQueryResolvers = Pick<QueryResolvers, "notebooks">;
+export const notebookQueries: NotebookQueryResolvers = {
+  notebooks: createResolver<QueryResolvers, "notebooks">()
+    .use(withAuthenticatedClient())
+    .resolve(async (_, args, context) => {
+      const options: ExplicitClientQueryOptions<"notebooks"> = {
+        client: context.client,
+        orgIds: context.orgIds,
+        tableName: "notebooks",
+        whereSchema: NotebookWhereSchema,
+        basePredicate: {
+          is: [{ key: "deleted_at", value: null }],
+        },
+      };
 
-    const options: ExplicitClientQueryOptions<"notebooks"> = {
-      client,
-      orgIds,
-      tableName: "notebooks",
-      whereSchema: NotebookWhereSchema,
-      basePredicate: {
-        is: [{ key: "deleted_at", value: null }],
-      },
-    };
-
-    return queryWithPagination(args, context, options);
-  },
+      return queryWithPagination(args, context, options);
+    }),
 };

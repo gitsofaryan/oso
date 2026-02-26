@@ -3,7 +3,12 @@ Resource types that support permission-based access control
 """
 enum ResourceType {
   NOTEBOOK
+  CHAT
   DATASET
+  DATA_MODEL
+  STATIC_MODEL
+  DATA_INGESTION
+  DATA_CONNECTION
 }
 
 """

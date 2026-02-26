@@ -51,7 +51,7 @@ type Run {
   """
   logsUrl: String
 
-  steps: StepConnection!
+  steps(first: Int = 50, after: String, single: Boolean, where: JSON): StepConnection!
   metadata: JSON
 }
 
@@ -72,11 +72,11 @@ type Step {
   run: Run!
   name: String!
   displayName: String!
-  logsUrl: String!
+  logsUrl: String
   startedAt: DateTime!
   finishedAt: DateTime
   status: StepStatus!
-  materializations: MaterializationConnection!
+  materializations(first: Int = 50, after: String, where: JSON): MaterializationConnection!
 }
 
 type StepEdge {
@@ -100,8 +100,8 @@ type Materialization {
   id: ID!
   runId: ID!
   run: Run!
-  stepId: ID!
-  step: Step!
+  stepId: ID
+  step: Step
   datasetId: ID!
   createdAt: DateTime!
   schema: [DataModelColumn!]

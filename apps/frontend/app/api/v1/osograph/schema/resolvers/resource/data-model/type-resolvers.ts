@@ -1,9 +1,4 @@
-import { getOrgResourceClient } from "@/app/api/v1/osograph/utils/access-control";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import {
-  getOrganization,
-  requireAuthentication,
-} from "@/app/api/v1/osograph/utils/auth";
+import { getOrganization } from "@/app/api/v1/osograph/utils/auth";
 import { ResourceErrors } from "@/app/api/v1/osograph/utils/errors";
 import {
   getMaterializations,
@@ -19,324 +14,232 @@ import {
   DataModelReleaseWhereSchema,
   DataModelRevisionWhereSchema,
 } from "@/app/api/v1/osograph/utils/validation";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
 import { queryWithPagination } from "@/app/api/v1/osograph/utils/query-helpers";
-import {
-  ModelRow,
-  ModelRevisionRow,
-  ModelReleaseRow,
-} from "@/lib/types/schema-types";
 import {
   executePreviewQuery,
   generateTableId,
 } from "@/app/api/v1/osograph/utils/model";
-import type { PreviewData } from "@/lib/graphql/generated/graphql";
+import type {
+  DataModelResolvers,
+  DataModelRevisionResolvers,
+  DataModelReleaseResolvers,
+  Resolvers,
+} from "@/app/api/v1/osograph/types/generated/types";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withOrgResourceClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
 
-/**
- * Type resolvers for DataModel, DataModelRevision, and DataModelRelease.
- * These field resolvers don't require auth checks as they operate on
- * already-fetched data model data.
- */
-export const dataModelTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
+export const dataModelTypeResolvers: Pick<
+  Resolvers,
+  "DataModel" | "DataModelRevision" | "DataModelRelease" | "DataModelDependency"
+> = {
   DataModel: {
-    orgId: (parent: ModelRow) => parent.org_id,
-    organization: async (
-      parent: ModelRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-      );
-      return getOrganization(parent.org_id, client);
-    },
-    dataset: async (
-      parent: ModelRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-      );
-      return getResourceById(
-        {
-          tableName: "datasets",
-          id: parent.dataset_id,
-          userId: "",
-        },
-        client,
-      );
-    },
-    revisions: async (
-      parent: ModelRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-        "read",
-      );
+    orgId: (parent) => parent.org_id,
+    organization: createResolver<DataModelResolvers, "organization">()
+      .use(
+        withOrgResourceClient("data_model", ({ parent }) => parent.id, "read"),
+      )
+      .resolve(async (parent, _args, context) =>
+        getOrganization(parent.org_id, context.client),
+      ),
+    dataset: createResolver<DataModelResolvers, "dataset">()
+      .use(
+        withOrgResourceClient("data_model", ({ parent }) => parent.id, "read"),
+      )
+      .resolve(async (parent, _args, context) => {
+        const dataset = await getResourceById(
+          "datasets",
+          parent.dataset_id,
+          context.client,
+        );
+        if (!dataset)
+          throw ResourceErrors.notFound("Dataset", parent.dataset_id);
+        return dataset;
+      }),
+    revisions: createResolver<DataModelResolvers, "revisions">()
+      .use(
+        withOrgResourceClient("data_model", ({ parent }) => parent.id, "read"),
+      )
+      .resolve(async (parent, args: FilterableConnectionArgs, context) =>
+        queryWithPagination(args, context, {
+          client: context.client,
+          orgIds: parent.org_id,
+          tableName: "model_revision",
+          whereSchema: DataModelRevisionWhereSchema,
+          basePredicate: {
+            eq: [{ key: "model_id", value: parent.id }],
+          },
+        }),
+      ),
+    releases: createResolver<DataModelResolvers, "releases">()
+      .use(
+        withOrgResourceClient("data_model", ({ parent }) => parent.id, "read"),
+      )
+      .resolve(async (parent, args: FilterableConnectionArgs, context) =>
+        queryWithPagination(args, context, {
+          client: context.client,
+          orgIds: parent.org_id,
+          tableName: "model_release",
+          whereSchema: DataModelReleaseWhereSchema,
+          basePredicate: {
+            eq: [{ key: "model_id", value: parent.id }],
+          },
+          orderBy: {
+            key: "created_at",
+            ascending: false,
+          },
+        }),
+      ),
+    isEnabled: (parent) => parent.is_enabled,
+    createdAt: (parent) => parent.created_at,
+    updatedAt: (parent) => parent.updated_at,
+    latestRevision: createResolver<DataModelResolvers, "latestRevision">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) => {
+        const { data, error } = await context.client
+          .from("model_revision")
+          .select("*")
+          .eq("model_id", parent.id)
+          .order("revision_number", { ascending: false })
+          .limit(1)
+          .single();
 
-      return queryWithPagination(args, context, {
-        client,
-        orgIds: parent.org_id,
-        tableName: "model_revision",
-        whereSchema: DataModelRevisionWhereSchema,
-        basePredicate: {
-          eq: [{ key: "model_id", value: parent.id }],
-        },
-      });
-    },
-    releases: async (
-      parent: ModelRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-        "read",
-      );
+        if (error) {
+          return null;
+        }
+        return data;
+      }),
+    latestRelease: createResolver<DataModelResolvers, "latestRelease">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) => {
+        const { data, error } = await context.client
+          .from("model_release")
+          .select("*")
+          .eq("model_id", parent.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
 
-      return queryWithPagination(args, context, {
-        client,
-        orgIds: parent.org_id,
-        tableName: "model_release",
-        whereSchema: DataModelReleaseWhereSchema,
-        basePredicate: {
-          eq: [{ key: "model_id", value: parent.id }],
-        },
-        orderBy: {
-          key: "created_at",
-          ascending: false,
-        },
-      });
-    },
-    isEnabled: (parent: ModelRow) => parent.is_enabled,
-    createdAt: (parent: ModelRow) => parent.created_at,
-    updatedAt: (parent: ModelRow) => parent.updated_at,
-    latestRevision: async (
-      parent: ModelRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-      );
-      const { data, error } = await client
-        .from("model_revision")
-        .select("*")
-        .eq("model_id", parent.id)
-        .order("revision_number", { ascending: false })
-        .limit(1)
-        .single();
-
-      if (error) {
-        return null;
-      }
-      return data;
-    },
-    latestRelease: async (
-      parent: ModelRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-      );
-      const { data, error } = await client
-        .from("model_release")
-        .select("*")
-        .eq("model_id", parent.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single();
-
-      if (error) {
-        return null;
-      }
-      return data;
-    },
-
-    runs: async (
-      parent: ModelRow,
-      args: ConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-      );
-      return getModelRunConnection(parent.dataset_id, parent.id, args, client);
-    },
-    modelContext: async (
-      parent: ModelRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-      );
-      return getModelContext(parent.dataset_id, parent.id, client);
-    },
-    materializations: async (
-      parent: ModelRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      return getMaterializations(
+        if (error) {
+          return null;
+        }
+        return data;
+      }),
+    runs: createResolver<DataModelResolvers, "runs">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.id))
+      .resolve(async (parent, args: ConnectionArgs, context) =>
+        getModelRunConnection(
+          parent.dataset_id,
+          parent.id,
+          args,
+          context.client,
+        ),
+      ),
+    modelContext: createResolver<DataModelResolvers, "modelContext">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.id))
+      .resolve(async (parent, _args, context) =>
+        getModelContext(parent.dataset_id, parent.id, context.client),
+      ),
+    materializations: async (parent, args: FilterableConnectionArgs, context) =>
+      getMaterializations(
         args,
         context,
         parent.org_id,
         parent.dataset_id,
         generateTableId("USER_MODEL", parent.id),
-      );
-    },
-    previewData: async (
-      parent: ModelRow,
-      _args: Record<string, never>,
-      context: GraphQLContext,
-    ): Promise<PreviewData> => {
-      const authenticatedUser = requireAuthentication(context.user);
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.id,
-        "read",
-      );
+      ),
+    previewData: createResolver<DataModelResolvers, "previewData">()
+      .use(
+        withOrgResourceClient("data_model", ({ parent }) => parent.id, "read"),
+      )
+      .resolve(async (parent, _args, context) => {
+        const tableId = generateTableId("USER_MODEL", parent.id);
 
-      const tableId = generateTableId("USER_MODEL", parent.id);
-
-      return executePreviewQuery(
-        parent.org_id,
-        parent.dataset_id,
-        tableId,
-        authenticatedUser,
-        parent.name,
-        client,
-      );
-    },
+        return executePreviewQuery(
+          parent.org_id,
+          parent.dataset_id,
+          tableId,
+          context.authenticatedUser,
+          parent.name,
+          context.client,
+        );
+      }),
   },
 
   DataModelRevision: {
-    orgId: (parent: ModelRevisionRow) => parent.org_id,
-    dataModelId: (parent: ModelRevisionRow) => parent.model_id,
-    dataModel: async (
-      parent: ModelRevisionRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.model_id,
-      );
-      const { data, error } = await client
-        .from("model")
-        .select("*")
-        .eq("id", parent.model_id)
-        .single();
-      if (error) {
-        throw ResourceErrors.notFound("DataModel", parent.model_id);
-      }
-      return data;
-    },
-    organization: async (
-      parent: ModelRevisionRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.model_id,
-      );
-      return getOrganization(parent.org_id, client);
-    },
-    revisionNumber: (parent: ModelRevisionRow) => parent.revision_number,
-    start: (parent: ModelRevisionRow) => parent.start,
-    end: (parent: ModelRevisionRow) => parent.end,
-    dependsOn: (parent: ModelRevisionRow) => parent.depends_on,
-    partitionedBy: (parent: ModelRevisionRow) => parent.partitioned_by,
-    clusteredBy: (parent: ModelRevisionRow) => parent.clustered_by,
-    kindOptions: (parent: ModelRevisionRow) => parent.kind_options,
-    createdAt: (parent: ModelRevisionRow) => parent.created_at,
+    orgId: (parent) => parent.org_id,
+    dataModelId: (parent) => parent.model_id,
+    dataModel: createResolver<DataModelRevisionResolvers, "dataModel">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.model_id))
+      .resolve(async (parent, _args, context) => {
+        const { data, error } = await context.client
+          .from("model")
+          .select("*")
+          .eq("id", parent.model_id)
+          .single();
+        if (error) {
+          throw ResourceErrors.notFound("DataModel", parent.model_id);
+        }
+        return data;
+      }),
+    organization: createResolver<DataModelRevisionResolvers, "organization">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.model_id))
+      .resolve(async (parent, _args, context) =>
+        getOrganization(parent.org_id, context.client),
+      ),
+    revisionNumber: (parent) => parent.revision_number,
+    start: (parent) => parent.start,
+    end: (parent) => parent.end,
+    dependsOn: (parent) => parent.depends_on,
+    partitionedBy: (parent) => parent.partitioned_by,
+    clusteredBy: (parent) => parent.clustered_by,
+    kindOptions: (parent) => parent.kind_options,
+    createdAt: (parent) => parent.created_at,
+  },
+
+  DataModelDependency: {
+    tableId: (parent) => parent.model_id ?? "",
+    alias: (parent) => parent.alias,
   },
 
   DataModelRelease: {
-    orgId: (parent: ModelReleaseRow) => parent.org_id,
-    dataModelId: (parent: ModelReleaseRow) => parent.model_id,
-    revisionId: (parent: ModelReleaseRow) => parent.model_revision_id,
-    dataModel: async (
-      parent: ModelReleaseRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.model_id,
-      );
-      const { data, error } = await client
-        .from("model")
-        .select("*")
-        .eq("id", parent.model_id)
-        .single();
-      if (error) {
-        throw ResourceErrors.notFound("DataModel", parent.model_id);
-      }
-      return data;
-    },
-    revision: async (
-      parent: ModelReleaseRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.model_id,
-      );
-      const { data, error } = await client
-        .from("model_revision")
-        .select("*")
-        .eq("id", parent.model_revision_id)
-        .single();
-      if (error) {
-        throw ResourceErrors.notFound(
-          "DataModelRevision",
-          parent.model_revision_id,
-        );
-      }
-      return data;
-    },
-    organization: async (
-      parent: ModelReleaseRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgResourceClient(
-        context,
-        "data_model",
-        parent.model_id,
-      );
-      return getOrganization(parent.org_id, client);
-    },
-    createdAt: (parent: ModelReleaseRow) => parent.created_at,
-    updatedAt: (parent: ModelReleaseRow) => parent.updated_at,
+    orgId: (parent) => parent.org_id,
+    dataModelId: (parent) => parent.model_id,
+    revisionId: (parent) => parent.model_revision_id,
+    dataModel: createResolver<DataModelReleaseResolvers, "dataModel">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.model_id))
+      .resolve(async (parent, _args, context) => {
+        const { data, error } = await context.client
+          .from("model")
+          .select("*")
+          .eq("id", parent.model_id)
+          .single();
+        if (error) {
+          throw ResourceErrors.notFound("DataModel", parent.model_id);
+        }
+        return data;
+      }),
+    revision: createResolver<DataModelReleaseResolvers, "revision">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.model_id))
+      .resolve(async (parent, _args, context) => {
+        const { data, error } = await context.client
+          .from("model_revision")
+          .select("*")
+          .eq("id", parent.model_revision_id)
+          .single();
+        if (error) {
+          throw ResourceErrors.notFound(
+            "DataModelRevision",
+            parent.model_revision_id,
+          );
+        }
+        return data;
+      }),
+    organization: createResolver<DataModelReleaseResolvers, "organization">()
+      .use(withOrgResourceClient("data_model", ({ parent }) => parent.model_id))
+      .resolve(async (parent, _args, context) =>
+        getOrganization(parent.org_id, context.client),
+      ),
+    createdAt: (parent) => parent.created_at,
+    updatedAt: (parent) => parent.updated_at,
   },
 };

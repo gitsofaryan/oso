@@ -1,20 +1,21 @@
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withOrgScopedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
 import { getUserProfile } from "@/app/api/v1/osograph/utils/auth";
-import { RunRow } from "@/lib/types/schema-types";
 import {
   RunStatus,
   RunTriggerType,
   RunType,
-} from "@/lib/graphql/generated/graphql";
-import { getOrgScopedClient } from "@/app/api/v1/osograph/utils/access-control";
+  type Resolvers,
+  type RunResolvers,
+} from "@/app/api/v1/osograph/types/generated/types";
 import { logger } from "@/lib/logger";
 import { ServerErrors } from "@/app/api/v1/osograph/utils/errors";
 import { getSignedUrl, parseGcsUrl } from "@/lib/clients/gcs";
 import { assertNever } from "@opensource-observer/utils";
 import { queryWithPagination } from "@/app/api/v1/osograph/utils/query-helpers";
-import { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
 import { StepWhereSchema } from "@/app/api/v1/osograph/utils/validation";
+import type { RunRow } from "@/lib/types/schema-types";
+import z from "zod";
 
 function mapRunStatus(status: RunRow["status"]): RunStatus {
   switch (status) {
@@ -33,73 +34,24 @@ function mapRunStatus(status: RunRow["status"]): RunStatus {
   }
 }
 
-/**
- * Type resolvers for Run.
- * These resolvers use organization-scoped authentication - users must be
- * members of the organization that owns the run to access these fields.
- */
-export const runTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
+export const runTypeResolvers: Required<Pick<Resolvers, "Run">> = {
   Run: {
-    datasetId: (parent: RunRow) => parent.dataset_id,
-    dataset: async (
-      parent: RunRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      if (!parent.dataset_id) {
-        return null;
-      }
-      const { client } = await getOrgScopedClient(context, parent.org_id);
-      const { data, error } = await client
-        .from("datasets")
-        .select("*")
-        .eq("id", parent.dataset_id)
-        .single();
-      if (error) {
-        logger.error(
-          `Error fetching dataset with id ${parent.dataset_id}: ${error.message}`,
-        );
-        throw ServerErrors.database(
-          `Failed to fetch dataset with id ${parent.dataset_id}`,
-        );
-      }
-      return data;
-    },
-    orgId: (parent: RunRow) => parent.org_id,
-    organization: async (
-      parent: RunRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgScopedClient(context, parent.org_id);
-      const { data, error } = await client
-        .from("organizations")
-        .select("*")
-        .eq("id", parent.org_id)
-        .single();
-      if (error) {
-        logger.error(
-          `Error fetching organization with id ${parent.org_id}: ${error.message}`,
-        );
-        throw ServerErrors.database(
-          `Failed to fetch organization with id ${parent.org_id}`,
-        );
-      }
-      return data;
-    },
-    triggerType: (parent: RunRow) =>
+    datasetId: (parent) => parent.dataset_id,
+    orgId: (parent) => parent.org_id,
+    triggerType: (parent) =>
       parent.run_type === "manual"
         ? RunTriggerType.Manual
         : RunTriggerType.Scheduled,
-    runType: (parent: RunRow) =>
+    runType: (parent) =>
       parent.run_type === "manual" ? RunType.Manual : RunType.Scheduled,
-    queuedAt: (parent: RunRow) => parent.queued_at,
-    status: (parent: RunRow) => mapRunStatus(parent.status),
-    startedAt: (parent: RunRow) => parent.started_at,
-    finishedAt: (parent: RunRow) => parent.completed_at,
-    logsUrl: async (parent: RunRow) => {
-      if (!parent.logs_url) return null;
+    queuedAt: (parent) => parent.queued_at,
+    status: (parent) => mapRunStatus(parent.status),
+    startedAt: (parent) => parent.started_at,
+    finishedAt: (parent) => parent.completed_at,
+    metadata: (parent) => z.record(z.unknown()).parse(parent.metadata),
 
+    logsUrl: async (parent) => {
+      if (!parent.logs_url) return null;
       try {
         const parsed = parseGcsUrl(parent.logs_url);
         if (!parsed) {
@@ -108,7 +60,6 @@ export const runTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
           );
           return parent.logs_url;
         }
-
         return await getSignedUrl(parsed.bucketName, parsed.fileName, 5);
       } catch (error) {
         logger.error(
@@ -117,34 +68,65 @@ export const runTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
         return parent.logs_url;
       }
     },
-    steps: async (
-      parent: RunRow,
-      args: FilterableConnectionArgs,
-      context: GraphQLContext,
-    ) => {
-      const { client } = await getOrgScopedClient(context, parent.org_id);
 
-      return queryWithPagination(args, context, {
-        client,
-        orgIds: parent.org_id,
-        tableName: "step",
-        whereSchema: StepWhereSchema,
-        basePredicate: {
-          eq: [{ key: "run_id", value: parent.id }],
-        },
-      });
-    },
-    requestedBy: async (
-      parent: RunRow,
-      _args: unknown,
-      context: GraphQLContext,
-    ) => {
-      if (!parent.requested_by) {
-        return null;
-      }
-      const { client } = await getOrgScopedClient(context, parent.org_id);
-      return getUserProfile(parent.requested_by, client);
-    },
-    metadata: (parent: RunRow) => parent.metadata,
+    dataset: createResolver<RunResolvers, "dataset">()
+      .use(withOrgScopedClient(({ parent }) => parent.org_id))
+      .resolve(async (parent, _args, context) => {
+        if (!parent.dataset_id) return null;
+        const { data, error } = await context.client
+          .from("datasets")
+          .select("*")
+          .eq("id", parent.dataset_id)
+          .single();
+        if (error) {
+          logger.error(
+            `Error fetching dataset with id ${parent.dataset_id}: ${error.message}`,
+          );
+          throw ServerErrors.database(
+            `Failed to fetch dataset with id ${parent.dataset_id}`,
+          );
+        }
+        return data;
+      }),
+
+    organization: createResolver<RunResolvers, "organization">()
+      .use(withOrgScopedClient(({ parent }) => parent.org_id))
+      .resolve(async (parent, _args, context) => {
+        const { data, error } = await context.client
+          .from("organizations")
+          .select("*")
+          .eq("id", parent.org_id)
+          .single();
+        if (error) {
+          logger.error(
+            `Error fetching organization with id ${parent.org_id}: ${error.message}`,
+          );
+          throw ServerErrors.database(
+            `Failed to fetch organization with id ${parent.org_id}`,
+          );
+        }
+        return data;
+      }),
+
+    steps: createResolver<RunResolvers, "steps">()
+      .use(withOrgScopedClient(({ parent }) => parent.org_id))
+      .resolve(async (parent, args, context) => {
+        return queryWithPagination(args, context, {
+          client: context.client,
+          orgIds: parent.org_id,
+          tableName: "step",
+          whereSchema: StepWhereSchema,
+          basePredicate: {
+            eq: [{ key: "run_id", value: parent.id }],
+          },
+        });
+      }),
+
+    requestedBy: createResolver<RunResolvers, "requestedBy">()
+      .use(withOrgScopedClient(({ parent }) => parent.org_id))
+      .resolve(async (parent, _args, context) => {
+        if (!parent.requested_by) return null;
+        return getUserProfile(parent.requested_by, context.client);
+      }),
   },
 };

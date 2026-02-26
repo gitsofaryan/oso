@@ -228,7 +228,7 @@ input CreateDatasetInput {
   """
   The display name of the dataset.
   """
-  displayName: String
+  displayName: String!
   """
   The description of the dataset.
   """
@@ -246,7 +246,7 @@ input CreateDatasetInput {
     * STATIC_MODEL: This is used for datasets composed of statically uploaded
       models. Currently only CSV files are supported for static models.
   """
-  type: DatasetType = USER_MODEL
+  type: DatasetType!
 }
 
 type CreateDatasetPayload {

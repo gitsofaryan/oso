@@ -1,11 +1,11 @@
 type ModelColumnContext {
   name: String!
-  context: String!
+  context: String
 }
 
 input ModelColumnContextInput {
   name: String!
-  context: String!
+  context: String
 }
 
 type ModelContext {

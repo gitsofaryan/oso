@@ -1,26 +1,22 @@
-import { getAuthenticatedClient } from "@/app/api/v1/osograph/utils/access-control";
-import type { GraphQLContext } from "@/app/api/v1/osograph/types/context";
-import { GraphQLResolverModule } from "@/app/api/v1/osograph/types/utils";
+import { createResolver } from "@/app/api/v1/osograph/utils/resolver-builder";
+import { withAuthenticatedClient } from "@/app/api/v1/osograph/utils/resolver-middleware";
+import type { QueryResolvers } from "@/app/api/v1/osograph/types/generated/types";
 import { queryWithPagination } from "@/app/api/v1/osograph/utils/query-helpers";
-import { FilterableConnectionArgs } from "@/app/api/v1/osograph/utils/pagination";
 import { RunWhereSchema } from "@/app/api/v1/osograph/utils/validation";
 
 /**
  * Top-level runs query that fetches runs for the authenticated user's organizations.
  */
-export const runsQueries: GraphQLResolverModule<GraphQLContext>["Query"] = {
-  runs: async (
-    _: unknown,
-    args: FilterableConnectionArgs,
-    context: GraphQLContext,
-  ) => {
-    const { client, orgIds } = await getAuthenticatedClient(context);
-
-    return queryWithPagination(args, context, {
-      client,
-      orgIds,
-      tableName: "run",
-      whereSchema: RunWhereSchema,
-    });
-  },
+type RunsQueryResolvers = Pick<QueryResolvers, "runs">;
+export const runsQueries: RunsQueryResolvers = {
+  runs: createResolver<QueryResolvers, "runs">()
+    .use(withAuthenticatedClient())
+    .resolve(async (_, args, context) => {
+      return queryWithPagination(args, context, {
+        client: context.client,
+        orgIds: context.orgIds,
+        tableName: "run",
+        whereSchema: RunWhereSchema,
+      });
+    }),
 };

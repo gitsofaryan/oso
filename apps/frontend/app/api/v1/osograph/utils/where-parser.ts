@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   type FilterMap,
   type QueryPredicate,
@@ -5,6 +6,7 @@ import {
   type TableRow,
   type ValidTableName,
 } from "@/app/api/v1/osograph/utils/query-builder";
+import { createWhereSchema } from "@/app/api/v1/osograph/utils/validation";
 
 type FieldComparisonOperators<
   T extends ValidTableName,
@@ -22,9 +24,23 @@ type FieldComparisonOperators<
   is?: null | boolean;
 };
 
-export type WhereClause<T extends ValidTableName> = {
+type InputComparisonOperators = z.infer<
+  ReturnType<typeof createWhereSchema>
+>[string];
+
+export type WhereClause<T extends ValidTableName> = Record<
+  string,
+  InputComparisonOperators
+> & {
   [K in StringKeys<TableRow<T>>]?: FieldComparisonOperators<T, K>;
 };
+
+function toSnakeCase(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .toLowerCase();
+}
 
 export function parseWhereClause<T extends ValidTableName>(
   where: WhereClause<T>,
@@ -32,8 +48,8 @@ export function parseWhereClause<T extends ValidTableName>(
   const predicate: Partial<QueryPredicate<T>> = {};
 
   for (const fieldKey in where) {
-    const field = fieldKey as StringKeys<TableRow<T>>;
-    const operators = where[field];
+    const field = toSnakeCase(fieldKey) as StringKeys<TableRow<T>>;
+    const operators = where[fieldKey];
 
     if (!operators) continue;
 

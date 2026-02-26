@@ -109,6 +109,13 @@ class DataIngestionRunRequestHandler(RunHandler[DataIngestionRunRequest]):
                 message=f"Unsupported type: {config.factory_type}",
             )
 
+        if config.config is None:
+            context.log.error(
+                "No ingestion config found",
+                extra={"dataset_id": dataset_id},
+            )
+            return FailedResponse(message="No ingestion config found")
+
         warehouse_user = get_warehouse_user(
             user_type="rw", org_id=org_id, org_name=context.organization.name
         )

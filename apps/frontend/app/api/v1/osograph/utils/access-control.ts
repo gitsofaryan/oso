@@ -8,6 +8,7 @@ import { AuthenticationErrors } from "@/app/api/v1/osograph/utils/errors";
 import { getUserOrganizationIds } from "@/app/api/v1/osograph/utils/resolver-helpers";
 import type { Database } from "@/lib/types/supabase";
 import { logger } from "@/lib/logger";
+import { z } from "zod";
 
 /**
  * Describes the org-scoping behavior of the current authentication context.
@@ -62,14 +63,18 @@ type ResourcePermissionColumn = TableColumns<"resource_permissions">;
  * Supports notebooks, chats, datasets, data models, static models,
  * data ingestions, and data connections.
  */
-export type ResourceType =
-  | "notebook"
-  | "chat"
-  | "dataset"
-  | "data_model"
-  | "static_model"
-  | "data_ingestion"
-  | "data_connection";
+const RESOURCE_TYPE_VALUES = [
+  "notebook",
+  "chat",
+  "dataset",
+  "data_model",
+  "static_model",
+  "data_ingestion",
+  "data_connection",
+] as const;
+
+export type ResourceType = (typeof RESOURCE_TYPE_VALUES)[number];
+export const LocalResourceTypeSchema = z.enum(RESOURCE_TYPE_VALUES);
 
 /**
  * Permission levels in hierarchical order (highest to lowest).
@@ -106,6 +111,7 @@ export interface OrgAccessResult {
 export interface ResourceAccessResult {
   client: SupabaseAdminClient;
   permissionLevel: Exclude<PermissionLevel, "none">;
+  orgId: string;
 }
 
 /**
@@ -150,11 +156,13 @@ function bypassesResourcePermissions(orgRole: OrgRole): boolean {
 function validateAndReturnResourceAccess(
   permissionLevel: PermissionLevel,
   requiredPermission: PermissionLevel,
+  orgId: string,
 ): ResourceAccessResult {
   if (hasMinimumPermission(permissionLevel, requiredPermission)) {
     return {
       client: createAdminClient(),
       permissionLevel: permissionLevel as Exclude<PermissionLevel, "none">,
+      orgId,
     };
   }
   logger.error("Permission level insufficient", {
@@ -419,6 +427,7 @@ export async function getOrgResourceClient(
     return {
       client: createAdminClient(),
       permissionLevel: "owner",
+      orgId: "",
     };
   }
 
@@ -427,9 +436,11 @@ export async function getOrgResourceClient(
 
   const cachedPermission = context.authCache.resourcePermissions.get(cacheKey);
   if (cachedPermission) {
+    const cachedOrgId = context.authCache.resourceOrgIds.get(cacheKey) ?? "";
     return validateAndReturnResourceAccess(
       cachedPermission as PermissionLevel,
       requiredPermission,
+      cachedOrgId,
     );
   }
 
@@ -448,18 +459,21 @@ export async function getOrgResourceClient(
     throw AuthenticationErrors.notAuthorized();
   }
 
+  const orgId = resource.org_id;
+  context.authCache.resourceOrgIds.set(cacheKey, orgId);
+
   const orgScope = getOrgScope(context);
   const isCrossOrgApiToken =
-    orgScope.type === "api_token" && orgScope.orgId !== resource.org_id;
+    orgScope.type === "api_token" && orgScope.orgId !== orgId;
 
   const orgRole = isCrossOrgApiToken
     ? undefined
-    : await getOrgRoleCached(client, context, user.userId, resource.org_id);
+    : await getOrgRoleCached(client, context, user.userId, orgId);
 
   if (orgRole && bypassesResourcePermissions(orgRole)) {
     const permissionLevel = orgRole === "owner" ? "owner" : "admin";
     context.authCache.resourcePermissions.set(cacheKey, permissionLevel);
-    return { client, permissionLevel };
+    return { client, permissionLevel, orgId };
   }
 
   if (!isCrossOrgApiToken) {
@@ -474,13 +488,17 @@ export async function getOrgResourceClient(
     if (userPermission) {
       const userLevel = userPermission.permission_level as PermissionLevel;
       context.authCache.resourcePermissions.set(cacheKey, userLevel);
-      return validateAndReturnResourceAccess(userLevel, requiredPermission);
+      return validateAndReturnResourceAccess(
+        userLevel,
+        requiredPermission,
+        orgId,
+      );
     }
   }
 
   if (orgRole === "member") {
     context.authCache.resourcePermissions.set(cacheKey, "read");
-    return validateAndReturnResourceAccess("read", requiredPermission);
+    return validateAndReturnResourceAccess("read", requiredPermission, orgId);
   }
 
   const publicPermission = await getResourcePublicPermission(
@@ -490,7 +508,11 @@ export async function getOrgResourceClient(
   );
 
   context.authCache.resourcePermissions.set(cacheKey, publicPermission);
-  return validateAndReturnResourceAccess(publicPermission, requiredPermission);
+  return validateAndReturnResourceAccess(
+    publicPermission,
+    requiredPermission,
+    orgId,
+  );
 }
 
 export async function getResourcePublicPermission(

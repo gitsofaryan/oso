@@ -152,7 +152,7 @@ async function queryWithExplicitClient<TTable extends TableWithOrgId>(
       return maybeAddQueryPagination(query, args);
     },
     {
-      single: args.single,
+      single: args.single ?? undefined,
       includeResourcePermissions: !!options.resourceConfig,
     },
   );
@@ -221,7 +221,7 @@ async function queryWithImplicitClient<TTable extends TableWithOrgId>(
       return maybeAddQueryPagination(query, args);
     },
     {
-      single: args.single,
+      single: args.single ?? undefined,
       includeResourcePermissions: !!options.resourceConfig,
     },
   );
