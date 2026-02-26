@@ -53,7 +53,7 @@ export const systemTypeResolvers: GraphQLResolverModule<GraphQLContext> = {
 
       const tableResolvers = [
         inferredTableResolver,
-        new PermissionsResolver(legacyMappingRules),
+        new PermissionsResolver(client, legacyMappingRules),
         new DBTableResolver(client, legacyMappingRules),
       ];
 

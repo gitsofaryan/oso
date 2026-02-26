@@ -5,6 +5,7 @@ import { queryMetadataSchema } from "@/lib/types/query-metadata";
 import { LegacyTableMappingRule } from "@/lib/query/common";
 import { Table } from "@/lib/types/table";
 import { PermissionError } from "@/lib/types/errors";
+import { SupabaseAdminClient } from "@/lib/supabase/admin";
 
 /**
  * This resolver is responsible for ensuring that the user has access to any
@@ -23,9 +24,14 @@ import { PermissionError } from "@/lib/types/errors";
  * this resolver.
  */
 export class PermissionsResolver implements TableResolver {
+  private client: SupabaseAdminClient;
   private legacyRules: LegacyTableMappingRule[];
 
-  constructor(legacyRules: LegacyTableMappingRule[]) {
+  constructor(
+    client: SupabaseAdminClient,
+    legacyRules: LegacyTableMappingRule[],
+  ) {
+    this.client = client;
     this.legacyRules = legacyRules;
   }
 
@@ -43,6 +49,25 @@ export class PermissionsResolver implements TableResolver {
         `MetadataInferredTableResolver: Invalid metadata, skipping resolver: ${e}`,
       );
       return tables;
+    }
+
+    const { data: permissions } = await this.client
+      .from("resource_permissions")
+      .select(
+        "*, organizations!inner(org_name), datasets!inner(name, organizations(org_name))",
+      )
+      .eq("organizations.org_name", parsedMetadata.orgName)
+      .not("dataset_id", "is", null)
+      .is("revoked_at", null);
+
+    const permissionMap = new Map<string, Set<string>>();
+    for (const permission of permissions ?? []) {
+      const datasetName = permission.datasets.name;
+      const orgName = permission.datasets.organizations.org_name;
+      if (!permissionMap.has(orgName)) {
+        permissionMap.set(orgName, new Set<string>());
+      }
+      permissionMap.get(orgName)?.add(datasetName);
     }
 
     const resolvedTables: TableResolutionMap = {};
@@ -69,7 +94,9 @@ export class PermissionsResolver implements TableResolver {
         );
       }
 
-      if (table.catalog !== parsedMetadata.orgName) {
+      const permission = permissionMap.get(table.catalog)?.has(table.dataset);
+
+      if (table.catalog !== parsedMetadata.orgName && !permission) {
         throw new PermissionError(
           `Current user or organization does not have access to table ${table.toString()}`,
         );
