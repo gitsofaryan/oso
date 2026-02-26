@@ -13,7 +13,6 @@ export const { getClient, query, PreloadQuery } = registerApolloClient(() => {
     cache: new InMemoryCache(),
     link: new HttpLink({
       uri: APP_GRAPHQL_URL,
-      credentials: "same-origin",
       headers: {
         cookie: headerInstance.get("cookie") ?? "",
       },
